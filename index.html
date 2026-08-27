@@ -78,13 +78,9 @@
   .fb-page-wrap{width:100%;max-width:500px;border-radius:0.75rem;overflow:hidden;background:rgba(255,255,255,0.04);display:flex;justify-content:center}
   .fb-page-wrap iframe{border-radius:0.75rem;width:100% !important}
   .pagasa-live-hint{font-size:0.72rem;color:rgba(255,255,255,0.5);margin-top:0.6rem;line-height:1.4}
-  .pagasa-live-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:0.6rem}
+  .pagasa-live-grid{display:grid;grid-template-columns:1fr;gap:0.6rem}
   .pagasa-live-grid .fb-page-wrap{max-width:none;width:100%}
-  .pagasa-live-row{display:flex;gap:1.25rem;flex-wrap:wrap;align-items:flex-start;margin-top:1.25rem;padding-top:1.1rem;border-top:1px solid rgba(255,255,255,0.12)}
-  .pagasa-live-row .pagasa-live-block{flex:1 1 320px;min-width:280px;margin-top:0;padding-top:0;border-top:none}
-  .pagasa-live-row .pagasa-live-block:first-child{flex:0.85 1 280px}
-  .pagasa-live-row .pagasa-live-block:last-child{flex:1.25 1 380px}
-  .pagasa-live-row .fb-page-wrap{max-width:100%}
+  @media(min-width:640px){.pagasa-live-grid{grid-template-columns:repeat(3, minmax(150px,1fr))}}
   .msn-link-btn{display:inline-flex;align-items:center;gap:0.5rem;padding:0.65rem 1rem;background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;font-weight:700;font-size:0.85rem;border-radius:0.6rem;transition:all .2s}
   .msn-link-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
 
@@ -327,13 +323,19 @@
     Settings are saved locally in your browser using localStorage. Weather data is provided by <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
   </p>
 
+  <div class="config-info" style="margin-top:1.75rem;border-color:rgba(34,197,94,0.5);background:rgba(34,197,94,0.12)">
+    📣 <strong>To update the live notice everyone sees</strong> (class suspension announcements and PAGASA advisories), submit the Google Form below. Anyone viewing this dashboard — on any device — will see the update within about a minute, no need to touch this Settings panel.
+  </div>
+  <a id="liveFormLink" href="#" target="_blank" rel="noopener" class="save-btn" style="display:block;text-align:center;text-decoration:none;background:linear-gradient(135deg,#22c55e,#16a34a);margin-top:0.5rem">📝 Open the Live Update Form</a>
+  <p class="config-hint" id="liveFormHint" style="margin-top:0.5rem"></p>
+
   <div class="config-info" style="margin-top:1.75rem">
-    📢 <strong>Official Announcement (manual)</strong>. Facebook doesn't let a webpage auto-detect specific posts by keyword, so use this when staff spot a real class-suspension post from PCO, the Mayor, or the Vice Mayor — type a short note yourselves (don't paste the post text) and link to the original.
+    📢 <strong>Official Announcement (local preview only — not shared)</strong>. This only shows on your own device/browser; use the Google Form above for an update everyone can see. Use this only to preview how an announcement will look, or as an offline fallback if the live Form/Sheet is unreachable.
   </div>
   <div class="config-field">
     <label for="annActive">
       <input id="annActive" type="checkbox" style="width:auto;display:inline-block;margin-right:0.4rem;vertical-align:middle" />
-      Show this announcement on the dashboard
+      Show this announcement on the dashboard (this device only)
     </label>
   </div>
   <div class="config-field">
@@ -353,15 +355,15 @@
     <label for="annUrl">Link to the original post</label>
     <input id="annUrl" type="url" placeholder="https://www.facebook.com/..." />
   </div>
-  <button class="save-btn" id="saveAnnouncementBtn" style="background:linear-gradient(135deg,#ef4444,#f97316)">📌 Save Announcement</button>
+  <button class="save-btn" id="saveAnnouncementBtn" style="background:linear-gradient(135deg,#ef4444,#f97316)">📌 Save Local Preview</button>
 
   <div class="config-info" style="margin-top:1.75rem">
-    🌦️ <strong>PAGASA Advisory Note (manual)</strong>. The HAYO/HINAY banner above is an automated estimate from live current weather data — it does <em>not</em> read PAGASA's Facebook posts. When PAGASA posts a bulletin (e.g. a Weather Advisory or Rainfall Outlook), use this to add a short note yourself (don't paste the post text) and link to it, so it shows next to the banner.
+    🌦️ <strong>PAGASA Advisory Note (local preview only — not shared)</strong>. Same as above: this only shows on your own device. Use the Google Form for a note everyone sees.
   </div>
   <div class="config-field">
     <label for="pagasaActive">
       <input id="pagasaActive" type="checkbox" style="width:auto;display:inline-block;margin-right:0.4rem;vertical-align:middle" />
-      Show this note on the dashboard
+      Show this note on the dashboard (this device only)
     </label>
   </div>
   <div class="config-field">
@@ -372,7 +374,7 @@
     <label for="pagasaUrl">Link to the original post</label>
     <input id="pagasaUrl" type="url" placeholder="https://www.facebook.com/PAGASA.DOST.GOV.PH/..." />
   </div>
-  <button class="save-btn" id="savePagasaAdvisoryBtn" style="background:linear-gradient(135deg,#eab308,#f97316)">🌦️ Save PAGASA Note</button>
+  <button class="save-btn" id="savePagasaAdvisoryBtn" style="background:linear-gradient(135deg,#eab308,#f97316)">🌦️ Save Local Preview</button>
 </aside>
 
 <!-- =============== MAIN CONTENT =============== -->
@@ -517,6 +519,120 @@
     localStorage.setItem(PAGASA_ADVISORY_KEY, JSON.stringify(a));
   }
 
+  // ---- Minimal CSV parser (handles quoted fields with commas/newlines,
+  // and "" as an escaped quote inside a quoted field) — enough for
+  // Google Sheets' published CSV export, no library needed. ----
+  function parseCSV(text){
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    for(let i = 0; i < text.length; i++){
+      const c = text[i];
+      if(inQuotes){
+        if(c === '"'){
+          if(text[i+1] === '"'){ field += '"'; i++; }
+          else{ inQuotes = false; }
+        }else{
+          field += c;
+        }
+      }else{
+        if(c === '"'){ inQuotes = true; }
+        else if(c === ','){ row.push(field); field = ""; }
+        else if(c === '\r'){ /* skip */ }
+        else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ""; }
+        else{ field += c; }
+      }
+    }
+    if(field.length || row.length){ row.push(field); rows.push(row); }
+    return rows.filter(r => r.length && r.some(c => c.trim() !== ""));
+  }
+
+  // Find the CSV column index whose header contains a given substring
+  // (case-insensitive), so minor wording tweaks to the Form questions
+  // don't break parsing.
+  function findCol(headers, substr){
+    const s = substr.toLowerCase();
+    return headers.findIndex(h => h.toLowerCase().includes(s));
+  }
+
+  // Turn the published-Sheet CSV into the two "current" notice objects
+  // the dashboard already knows how to render. Each Form submission is a
+  // new row; for each Message Type we use the most recent row (last one
+  // in the sheet), so staff can deactivate a notice by simply submitting
+  // a fresh "Show this on the dashboard? = No" response.
+  function buildNoticesFromCSV(text){
+    const rows = parseCSV(text);
+    const fallback = {
+      announcement: { active:false, source:"", note:"", url:"", updatedAt:0 },
+      pagasaAdvisory: { active:false, note:"", url:"", updatedAt:0 },
+    };
+    if(rows.length < 2) return fallback;
+    const headers = rows[0];
+    const iType = findCol(headers, "message type");
+    const iActive = findCol(headers, "show this on the dashboard");
+    const iSource = findCol(headers, "source");
+    const iNote = findCol(headers, "note");
+    const iUrl = findCol(headers, "link");
+    const iTime = findCol(headers, "timestamp");
+    if(iType < 0 || iActive < 0 || iNote < 0) return fallback;
+
+    let latestAnn = null, latestPagasa = null;
+    for(let r = 1; r < rows.length; r++){
+      const row = rows[r];
+      const type = (row[iType] || "").toLowerCase();
+      const ts = iTime >= 0 ? Date.parse(row[iTime]) || r : r; // fall back to row order
+      const entry = { row, ts };
+      if(type.includes("official")){
+        if(!latestAnn || ts >= latestAnn.ts) latestAnn = entry;
+      }else if(type.includes("pagasa")){
+        if(!latestPagasa || ts >= latestPagasa.ts) latestPagasa = entry;
+      }
+    }
+    const isYes = (v) => /^\s*yes\b/i.test(v || "");
+
+    const result = { announcement: fallback.announcement, pagasaAdvisory: fallback.pagasaAdvisory };
+    if(latestAnn){
+      result.announcement = {
+        active: isYes(latestAnn.row[iActive]),
+        source: iSource >= 0 ? (latestAnn.row[iSource] || "") : "",
+        note: (latestAnn.row[iNote] || "").slice(0, 280),
+        url: iUrl >= 0 ? (latestAnn.row[iUrl] || "") : "",
+        updatedAt: latestAnn.ts && !isNaN(latestAnn.ts) ? latestAnn.ts : Date.now(),
+      };
+    }
+    if(latestPagasa){
+      result.pagasaAdvisory = {
+        active: isYes(latestPagasa.row[iActive]),
+        note: (latestPagasa.row[iNote] || "").slice(0, 280),
+        url: iUrl >= 0 ? (latestPagasa.row[iUrl] || "") : "",
+        updatedAt: latestPagasa.ts && !isNaN(latestPagasa.ts) ? latestPagasa.ts : Date.now(),
+      };
+    }
+    return result;
+  }
+
+  let sharedNoticesFailed = false;
+  async function fetchSharedNotices(){
+    if(!SHEET_CSV_URL) return; // not configured yet — local Settings values (if any) still apply
+    try{
+      const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const text = await res.text();
+      const notices = buildNoticesFromCSV(text);
+      state.announcement = notices.announcement;
+      state.pagasaAdvisory = notices.pagasaAdvisory;
+      sharedNoticesFailed = false;
+      renderState();
+    }catch(e){
+      // Keep showing the last-known values; don't blank the banner just
+      // because one poll failed (e.g. transient network hiccup).
+      sharedNoticesFailed = true;
+      console.warn("Could not refresh shared notices:", e);
+    }
+  }
+
+
   const DEFAULT_CITY = "Balanga";
   const DEFAULT_COUNTRY = "PH";
   const DEFAULT_LAT = 14.6786;
@@ -525,6 +641,25 @@
   const API_BASE = "https://api.open-meteo.com/v1/forecast";
   const GEOCODE_BASE = "https://geocoding-api.open-meteo.com/v1/search";
   const BASE_TITLE = document.title;
+
+  // ====== SHARED LIVE NOTICES (Google Form -> Google Sheet -> CSV) ======
+  // Non-technical staff submit updates via a Google Form. Form responses
+  // land in a linked Google Sheet, which is published to the web as CSV.
+  // Every visitor's browser fetches that CSV directly — no backend needed,
+  // and it works on any static host (GitHub Pages, Netlify, etc).
+  //
+  // SETUP (one-time, see accompanying instructions):
+  //   1. Create the Google Form with the exact questions listed in the
+  //      setup guide.
+  //   2. Link it to a Google Sheet (Responses tab -> Sheets icon).
+  //   3. File > Share > Publish to web -> pick the response sheet -> CSV.
+  //   4. Paste the resulting URL below (it ends in "output=csv").
+  //   5. Also paste the Form's own shareable URL into FORM_URL so the
+  //      Settings panel can link staff straight to it.
+  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSU1suQElB1RLkUzoYd7s_7DgMqV429Z4Mb-zslOKcSNkif1IGg6CbVjK28LmtEpifzJdLvDEDLa4ko/pub?output=csv";
+  const FORM_URL = "https://forms.gle/k3QH9C9RifwrfBYk6";
+  const NOTICES_REFRESH_MS = 60 * 1000; // poll every 60s for near-live updates
+
 
   let state = {
     config: loadConfig(),
@@ -535,6 +670,7 @@
     error: null,
     lastFetch: 0,
     autoTimer: null,
+    noticesTimer: null,
     advisoryLevel: "none",
     titleFlashTimer: null,
     titleFlashOn: false,
@@ -1611,11 +1747,13 @@
         ${alertsArr.length ? `<span class="alerts-count">${alertsArr.length} Active</span>` : ""}
       </div>
       ${alertsHtml}
-      <div class="pagasa-live-row">
       <div class="pagasa-live-block">
-        <div class="pagasa-live-head">
-          <span class="live-dot"></span>
-          <span>Live from DOST-PAGASA (Facebook)</span>
+        <div class="pagasa-live-head" style="justify-content:space-between;flex-wrap:wrap">
+          <span style="display:flex;align-items:center;gap:0.5rem">
+            <span class="live-dot"></span>
+            <span>Live from DOST-PAGASA (Facebook)</span>
+          </span>
+          <a href="${FORM_URL || '#'}" target="_blank" rel="noopener" class="msn-link-btn" style="font-size:0.75rem;padding:0.35rem 0.7rem;${FORM_URL ? '' : 'opacity:0.5;pointer-events:none;'}">📝 Report an Update</a>
         </div>
         <div class="fb-page-wrap">
           <div class="fb-page"
@@ -1674,8 +1812,22 @@
               </blockquote>
             </div>
           </div>
+          <div class="fb-page-wrap">
+            <div class="fb-page"
+                 data-href="https://www.facebook.com/BataanPDRRMO"
+                 data-tabs="timeline"
+                 data-width="340"
+                 data-height="420"
+                 data-small-header="true"
+                 data-adapt-container-width="true"
+                 data-hide-cover="true"
+                 data-show-facepile="false">
+              <blockquote cite="https://www.facebook.com/BataanPDRRMO" class="fb-xfbml-parse-ignore">
+                <a href="https://www.facebook.com/BataanPDRRMO" target="_blank" rel="noopener">Bataan PDRRMO</a> — official page. If this doesn't load, <a href="https://www.facebook.com/BataanPDRRMO" target="_blank" rel="noopener">view it directly on Facebook</a>.
+              </blockquote>
+            </div>
+          </div>
         </div>
-      </div>
       </div>
 
       <div class="pagasa-live-block">
@@ -1793,6 +1945,18 @@
     const pagasaNote = document.getElementById("pagasaNote");
     const pagasaUrl = document.getElementById("pagasaUrl");
     const savePagasaBtn = document.getElementById("savePagasaAdvisoryBtn");
+    const liveFormLink = document.getElementById("liveFormLink");
+    const liveFormHint = document.getElementById("liveFormHint");
+
+    if(FORM_URL){
+      liveFormLink.href = FORM_URL;
+      liveFormHint.textContent = "";
+    }else{
+      liveFormLink.href = "#";
+      liveFormLink.style.opacity = "0.5";
+      liveFormLink.style.pointerEvents = "none";
+      liveFormHint.textContent = "Form not set up yet — see the setup guide to create it, then paste the link into FORM_URL in the code.";
+    }
 
     cityInput.value = state.config.city || DEFAULT_CITY;
     countryInput.value = (state.config.country || DEFAULT_COUNTRY).toUpperCase();
@@ -1859,7 +2023,9 @@
     document.getElementById("retryBtn").addEventListener("click", fetchAllWeather);
     initSettingsPanel();
     fetchAllWeather();
+    fetchSharedNotices();
     state.autoTimer = setInterval(fetchAllWeather, REFRESH_MS);
+    state.noticesTimer = setInterval(fetchSharedNotices, NOTICES_REFRESH_MS);
   }
 
   if(document.readyState === "loading"){
