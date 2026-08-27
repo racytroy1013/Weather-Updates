@@ -354,6 +354,25 @@
     <input id="annUrl" type="url" placeholder="https://www.facebook.com/..." />
   </div>
   <button class="save-btn" id="saveAnnouncementBtn" style="background:linear-gradient(135deg,#ef4444,#f97316)">📌 Save Announcement</button>
+
+  <div class="config-info" style="margin-top:1.75rem">
+    🌦️ <strong>PAGASA Advisory Note (manual)</strong>. The HAYO/HINAY banner above is an automated estimate from live current weather data — it does <em>not</em> read PAGASA's Facebook posts. When PAGASA posts a bulletin (e.g. a Weather Advisory or Rainfall Outlook), use this to add a short note yourself (don't paste the post text) and link to it, so it shows next to the banner.
+  </div>
+  <div class="config-field">
+    <label for="pagasaActive">
+      <input id="pagasaActive" type="checkbox" style="width:auto;display:inline-block;margin-right:0.4rem;vertical-align:middle" />
+      Show this note on the dashboard
+    </label>
+  </div>
+  <div class="config-field">
+    <label for="pagasaNote">Short note (write it yourself, don't paste the post)</label>
+    <textarea id="pagasaNote" rows="3" maxlength="280" placeholder="e.g. PAGASA issued Weather Advisory No. 19 for Southwest Monsoon — heavy rain outlook for Bataan over the next 24 hours." style="width:100%;padding:0.65rem 0.85rem;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:0.5rem;color:#fff;font-size:0.9rem;font-family:inherit;resize:vertical"></textarea>
+  </div>
+  <div class="config-field">
+    <label for="pagasaUrl">Link to the original post</label>
+    <input id="pagasaUrl" type="url" placeholder="https://www.facebook.com/PAGASA.DOST.GOV.PH/..." />
+  </div>
+  <button class="save-btn" id="savePagasaAdvisoryBtn" style="background:linear-gradient(135deg,#eab308,#f97316)">🌦️ Save PAGASA Note</button>
 </aside>
 
 <!-- =============== MAIN CONTENT =============== -->
@@ -451,6 +470,7 @@
   // ========== Configuration ==========
   const CONFIG_KEY = "sdo_weather_config_v1";
   const ANNOUNCEMENT_KEY = "sdo_manual_announcement_v1";
+  const PAGASA_ADVISORY_KEY = "sdo_pagasa_advisory_note_v1";
 
   function loadAnnouncement(){
     try{
@@ -472,6 +492,31 @@
     localStorage.setItem(ANNOUNCEMENT_KEY, JSON.stringify(a));
   }
 
+  // Manually-curated note pointing to a live PAGASA Facebook advisory
+  // (e.g. "Weather Advisory No. 19"). This is separate from the automated
+  // HAYO/HINAY/HINGA/HINTO banner above, since that banner is computed
+  // purely from live current weather data and cannot read Facebook post
+  // content. Staff fill this in by hand when PAGASA posts a bulletin, so
+  // the dashboard can surface a link to it right alongside the banner.
+  function loadPagasaAdvisory(){
+    try{
+      const raw = localStorage.getItem(PAGASA_ADVISORY_KEY);
+      if(!raw) return { active:false, note:"", url:"", updatedAt:0 };
+      const a = JSON.parse(raw);
+      return {
+        active: !!a.active,
+        note: a.note || "",
+        url: a.url || "",
+        updatedAt: a.updatedAt || 0,
+      };
+    }catch(e){
+      return { active:false, note:"", url:"", updatedAt:0 };
+    }
+  }
+  function savePagasaAdvisory(a){
+    localStorage.setItem(PAGASA_ADVISORY_KEY, JSON.stringify(a));
+  }
+
   const DEFAULT_CITY = "Balanga";
   const DEFAULT_COUNTRY = "PH";
   const DEFAULT_LAT = 14.6786;
@@ -484,6 +529,7 @@
   let state = {
     config: loadConfig(),
     announcement: loadAnnouncement(),
+    pagasaAdvisory: loadPagasaAdvisory(),
     data: null,
     loading: false,
     error: null,
@@ -1349,6 +1395,28 @@
       </section>`;
     }
 
+    // Manually-curated note pointing to a live PAGASA advisory post (e.g.
+    // "Weather Advisory No. 19"). Shown whenever staff have flagged one,
+    // regardless of what the automated HAYO/HINAY banner above says, since
+    // that banner can't read PAGASA's Facebook content and may lag behind
+    // an official forecast advisory.
+    if(state.pagasaAdvisory && state.pagasaAdvisory.active && state.pagasaAdvisory.note){
+      const pn = state.pagasaAdvisory;
+      const pnWhen = pn.updatedAt ? formatDate(Math.floor(pn.updatedAt/1000)) + " " + formatTime(Math.floor(pn.updatedAt/1000)) : "";
+      html += `<section class="advisory-banner advisory-yellow" style="--adv-color:#eab308;--adv-bg:rgba(234,179,8,0.14);--adv-border:rgba(234,179,8,0.4)">
+        <div class="advisory-icon">${SM.info.replace('stroke="currentColor"','stroke="#eab308"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:22px;height:22px"')}</div>
+        <div class="advisory-body">
+          <div class="advisory-title">PAGASA ADVISORY (see live feed below)</div>
+          <div class="advisory-sub" style="font-size:0.88rem;color:#fff;font-weight:600">${str(pn.note).replace(/</g,"&lt;")}</div>
+          <div class="advisory-sub" style="margin-top:0.5rem">
+            ${pn.url ? `<a href="${str(pn.url)}" target="_blank" rel="noopener" style="color:#fde68a;font-weight:700">View the original post →</a>` : ""}
+            ${pnWhen ? ` &nbsp;•&nbsp; Noted ${pnWhen}` : ""}
+          </div>
+          <div class="advisory-sub" style="margin-top:0.4rem;opacity:0.85">This is a staff-flagged note, separate from the automated estimate above — always a forecast/outlook, not necessarily current conditions.</div>
+        </div>
+      </section>`;
+    }
+
     // Manually-curated official announcement (admin-entered via Settings —
     // e.g. staff spotted a real "Walang Pasok"/class suspension post from
     // the Mayor or PCO and flagged it here). Never auto-scraped; always a
@@ -1721,6 +1789,10 @@
     const annNote = document.getElementById("annNote");
     const annUrl = document.getElementById("annUrl");
     const saveAnnBtn = document.getElementById("saveAnnouncementBtn");
+    const pagasaActive = document.getElementById("pagasaActive");
+    const pagasaNote = document.getElementById("pagasaNote");
+    const pagasaUrl = document.getElementById("pagasaUrl");
+    const savePagasaBtn = document.getElementById("savePagasaAdvisoryBtn");
 
     cityInput.value = state.config.city || DEFAULT_CITY;
     countryInput.value = (state.config.country || DEFAULT_COUNTRY).toUpperCase();
@@ -1729,6 +1801,10 @@
     annSource.value = state.announcement.source || "Presidential Communications Office";
     annNote.value = state.announcement.note || "";
     annUrl.value = state.announcement.url || "";
+
+    pagasaActive.checked = !!state.pagasaAdvisory.active;
+    pagasaNote.value = state.pagasaAdvisory.note || "";
+    pagasaUrl.value = state.pagasaAdvisory.url || "";
 
     function open(){ panel.classList.add("open"); }
     function close(){ panel.classList.remove("open"); }
@@ -1759,6 +1835,19 @@
       };
       state.announcement = newAnn;
       saveAnnouncement(newAnn);
+      close();
+      renderState();
+    });
+
+    savePagasaBtn.addEventListener("click", () => {
+      const newNote = {
+        active: pagasaActive.checked,
+        note: pagasaNote.value.trim().slice(0, 280),
+        url: pagasaUrl.value.trim(),
+        updatedAt: Date.now(),
+      };
+      state.pagasaAdvisory = newNote;
+      savePagasaAdvisory(newNote);
       close();
       renderState();
     });
