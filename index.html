@@ -78,6 +78,10 @@
   .fb-page-wrap{width:100%;max-width:500px;border-radius:0.75rem;overflow:hidden;background:rgba(255,255,255,0.04)}
   .fb-page-wrap iframe{border-radius:0.75rem}
   .pagasa-live-hint{font-size:0.72rem;color:rgba(255,255,255,0.5);margin-top:0.6rem;line-height:1.4}
+  .pagasa-live-grid{display:flex;gap:0.75rem;flex-wrap:wrap}
+  .pagasa-live-grid .fb-page-wrap{max-width:240px}
+  .msn-link-btn{display:inline-flex;align-items:center;gap:0.5rem;padding:0.65rem 1rem;background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;font-weight:700;font-size:0.85rem;border-radius:0.6rem;transition:all .2s}
+  .msn-link-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
 
   .current-card{padding:1.5rem;margin-bottom:1.5rem}
   @media(min-width:640px){.current-card{padding:2rem}}
@@ -271,7 +275,7 @@
       </div>
       <div>
         <div class="brand-title">SDO Balanga City</div>
-        <div class="brand-sub">Schools Division Office — Bataan</div>
+        <div class="brand-sub">Schools Division Office — Balanga City</div>
       </div>
     </div>
     <nav class="nav">
@@ -317,6 +321,34 @@
   <p class="config-hint" style="margin-top:1rem">
     Settings are saved locally in your browser using localStorage. Weather data is provided by <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
   </p>
+
+  <div class="config-info" style="margin-top:1.75rem">
+    📢 <strong>Official Announcement (manual)</strong>. Facebook doesn't let a webpage auto-detect specific posts by keyword, so use this when staff spot a real class-suspension post from PCO, the Mayor, or the Vice Mayor — type a short note yourselves (don't paste the post text) and link to the original.
+  </div>
+  <div class="config-field">
+    <label for="annActive">
+      <input id="annActive" type="checkbox" style="width:auto;display:inline-block;margin-right:0.4rem;vertical-align:middle" />
+      Show this announcement on the dashboard
+    </label>
+  </div>
+  <div class="config-field">
+    <label for="annSource">Source</label>
+    <select id="annSource" style="width:100%;padding:0.65rem 0.85rem;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:0.5rem;color:#fff;font-size:0.9rem;font-family:inherit">
+      <option value="Presidential Communications Office">Presidential Communications Office</option>
+      <option value="Mayor Raquel Garcia">Mayor Raquel Garcia</option>
+      <option value="Joet Garcia">Joet Garcia</option>
+      <option value="Other">Other</option>
+    </select>
+  </div>
+  <div class="config-field">
+    <label for="annNote">Short note (write it yourself, don't paste the post)</label>
+    <textarea id="annNote" rows="3" maxlength="280" placeholder="e.g. Classes suspended in Balanga City for [date] per the Mayor's announcement." style="width:100%;padding:0.65rem 0.85rem;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:0.5rem;color:#fff;font-size:0.9rem;font-family:inherit;resize:vertical"></textarea>
+  </div>
+  <div class="config-field">
+    <label for="annUrl">Link to the original post</label>
+    <input id="annUrl" type="url" placeholder="https://www.facebook.com/..." />
+  </div>
+  <button class="save-btn" id="saveAnnouncementBtn" style="background:linear-gradient(135deg,#ef4444,#f97316)">📌 Save Announcement</button>
 </aside>
 
 <!-- =============== MAIN CONTENT =============== -->
@@ -413,6 +445,28 @@
 
   // ========== Configuration ==========
   const CONFIG_KEY = "sdo_weather_config_v1";
+  const ANNOUNCEMENT_KEY = "sdo_manual_announcement_v1";
+
+  function loadAnnouncement(){
+    try{
+      const raw = localStorage.getItem(ANNOUNCEMENT_KEY);
+      if(!raw) return { active:false, source:"", note:"", url:"", updatedAt:0 };
+      const a = JSON.parse(raw);
+      return {
+        active: !!a.active,
+        source: a.source || "",
+        note: a.note || "",
+        url: a.url || "",
+        updatedAt: a.updatedAt || 0,
+      };
+    }catch(e){
+      return { active:false, source:"", note:"", url:"", updatedAt:0 };
+    }
+  }
+  function saveAnnouncement(a){
+    localStorage.setItem(ANNOUNCEMENT_KEY, JSON.stringify(a));
+  }
+
   const DEFAULT_CITY = "Balanga";
   const DEFAULT_COUNTRY = "PH";
   const DEFAULT_LAT = 14.6786;
@@ -424,6 +478,7 @@
 
   let state = {
     config: loadConfig(),
+    announcement: loadAnnouncement(),
     data: null,
     loading: false,
     error: null,
@@ -1289,6 +1344,26 @@
       </section>`;
     }
 
+    // Manually-curated official announcement (admin-entered via Settings —
+    // e.g. staff spotted a real "Walang Pasok"/class suspension post from
+    // the Mayor or PCO and flagged it here). Never auto-scraped; always a
+    // human decision, shown with a link back to the original post.
+    if(state.announcement && state.announcement.active && state.announcement.note){
+      const ann = state.announcement;
+      const annWhen = ann.updatedAt ? formatDate(Math.floor(ann.updatedAt/1000)) + " " + formatTime(Math.floor(ann.updatedAt/1000)) : "";
+      html += `<section class="advisory-banner advisory-red" style="--adv-color:#ef4444;--adv-bg:rgba(239,68,68,0.16);--adv-border:rgba(239,68,68,0.5)">
+        <div class="advisory-icon">${SM.alertTri.replace('stroke="currentColor"','stroke="#ef4444"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px"')}</div>
+        <div class="advisory-body">
+          <div class="advisory-title">OFFICIAL ANNOUNCEMENT${ann.source ? " — " + str(ann.source) : ""}</div>
+          <div class="advisory-sub" style="font-size:0.88rem;color:#fff;font-weight:600">${str(ann.note).replace(/</g,"&lt;")}</div>
+          <div class="advisory-sub" style="margin-top:0.5rem">
+            ${ann.url ? `<a href="${str(ann.url)}" target="_blank" rel="noopener" style="color:#fca5a5;font-weight:700">View the original post →</a>` : ""}
+            ${annWhen ? `<span style="margin-left:0.5rem;opacity:0.7">Flagged by staff: ${annWhen}</span>` : ""}
+          </div>
+        </div>
+      </section>`;
+    }
+
     // Header: location + refresh
     const cityName = str(safe(cur, "name"), state.config.city || DEFAULT_CITY);
     const country = str(safe(cur, "sys.country"), state.config.country || DEFAULT_COUNTRY);
@@ -1485,6 +1560,64 @@
         </div>
         <p class="pagasa-live-hint">This is the actual live DOST-PAGASA Facebook feed, embedded directly from Facebook — not a copy. Bulletins appear here as soon as PAGASA posts them.</p>
       </div>
+
+      <div class="pagasa-live-block">
+        <div class="pagasa-live-head">
+          <span class="live-dot"></span>
+          <span>Live from Balanga City LGU officials (Facebook)</span>
+        </div>
+        <p class="pagasa-live-hint" style="margin-top:0;margin-bottom:0.6rem">
+          <strong>What to scan for:</strong> posts announcing class suspensions ("Walang Pasok" / class suspended) for Balanga City.
+        </p>
+        <div class="pagasa-live-grid">
+          <div class="fb-page-wrap">
+            <div class="fb-page"
+                 data-href="https://www.facebook.com/mayor.raquelgarcia"
+                 data-tabs="timeline"
+                 data-width="240"
+                 data-height="420"
+                 data-small-header="true"
+                 data-adapt-container-width="true"
+                 data-hide-cover="true"
+                 data-show-facepile="false">
+              <blockquote cite="https://www.facebook.com/mayor.raquelgarcia" class="fb-xfbml-parse-ignore">
+                <a href="https://www.facebook.com/mayor.raquelgarcia" target="_blank" rel="noopener">Mayor Raquel Garcia</a> — official page. If this doesn't load, <a href="https://www.facebook.com/mayor.raquelgarcia" target="_blank" rel="noopener">view it directly on Facebook</a>.
+              </blockquote>
+            </div>
+          </div>
+          <div class="fb-page-wrap">
+            <div class="fb-page"
+                 data-href="https://www.facebook.com/joetgarcia"
+                 data-tabs="timeline"
+                 data-width="240"
+                 data-height="420"
+                 data-small-header="true"
+                 data-adapt-container-width="true"
+                 data-hide-cover="true"
+                 data-show-facepile="false">
+              <blockquote cite="https://www.facebook.com/joetgarcia" class="fb-xfbml-parse-ignore">
+                <a href="https://www.facebook.com/joetgarcia" target="_blank" rel="noopener">Joet Garcia</a> — official page. If this doesn't load, <a href="https://www.facebook.com/joetgarcia" target="_blank" rel="noopener">view it directly on Facebook</a>.
+              </blockquote>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pagasa-live-block">
+        <div class="pagasa-live-head">
+          <span class="live-dot" style="background:#0ea5e9"></span>
+          <span>MSN Severe Weather Alerts — Balanga City</span>
+        </div>
+        <p class="pagasa-live-hint" style="margin-top:0;margin-bottom:0.7rem">
+          MSN's severe weather page can't be embedded directly on other sites (Microsoft blocks that for security), so this opens MSN's live alert page pre-scoped to Balanga City, Central Luzon in a new tab.
+        </p>
+        <a href="https://www.msn.com/en-ph/weather/maps/severeweather/in-Balanga-City,Central-Luzon?loc=eyJsIjoiQmFsYW5nYSBDaXR5IiwiciI6IkNlbnRyYWwgTHV6b24iLCJyMiI6IkJhdGFhbiIsImMiOiJQaGlsaXBwaW5lcyIsImkiOiJQSCIsImciOiJlbi1waCIsIngiOiIxMjAuNTQwMDAwOTE1NTI3MzQiLCJ5IjoiMTQuNjgwOTk5NzU1ODU5Mzc1In0%3D&weadegreetype=C"
+           target="_blank" rel="noopener" class="msn-link-btn">
+          ${SM.alertTri.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
+          Open MSN Severe Weather Alerts
+          ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
+        </a>
+      </div>
     </section>`;
 
     // Detailed metrics
@@ -1576,9 +1709,19 @@
     const saveBtn = document.getElementById("saveConfigBtn");
     const cityInput = document.getElementById("cityInput");
     const countryInput = document.getElementById("countryInput");
+    const annActive = document.getElementById("annActive");
+    const annSource = document.getElementById("annSource");
+    const annNote = document.getElementById("annNote");
+    const annUrl = document.getElementById("annUrl");
+    const saveAnnBtn = document.getElementById("saveAnnouncementBtn");
 
     cityInput.value = state.config.city || DEFAULT_CITY;
     countryInput.value = (state.config.country || DEFAULT_COUNTRY).toUpperCase();
+
+    annActive.checked = !!state.announcement.active;
+    annSource.value = state.announcement.source || "Presidential Communications Office";
+    annNote.value = state.announcement.note || "";
+    annUrl.value = state.announcement.url || "";
 
     function open(){ panel.classList.add("open"); }
     function close(){ panel.classList.remove("open"); }
@@ -1597,6 +1740,20 @@
       saveConfig(newCfg);
       close();
       fetchAllWeather();
+    });
+
+    saveAnnBtn.addEventListener("click", () => {
+      const newAnn = {
+        active: annActive.checked,
+        source: annSource.value,
+        note: annNote.value.trim().slice(0, 280),
+        url: annUrl.value.trim(),
+        updatedAt: Date.now(),
+      };
+      state.announcement = newAnn;
+      saveAnnouncement(newAnn);
+      close();
+      renderState();
     });
   }
 
