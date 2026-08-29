@@ -1010,12 +1010,16 @@
     { level:"orange", min:15,  label:"Orange Rainfall Warning", desc:"Intense Rain (15–30mm/hr). Flooding is highly threatening, landslides can occur. PREPARE: be alert and ready to move." },
     { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"Heavy Rain (7.5–15mm/hr). Flooding is possible in low-lying areas. MONITOR: stay aware, check local conditions." },
   ];
+  // Shared TCWS reference data — used both by the wind-signal banner (below)
+  // and the full reference table in the Guidelines card, so the two never
+  // drift out of sync. `range` is the display string for the table; `min`
+  // is the numeric floor used by getWindSignal() to classify live wind data.
   const WIND_SIGNALS = [
-    { signal:5, min:185, label:"TCWS #5" },
-    { signal:4, min:118, label:"TCWS #4" },
-    { signal:3, min:89,  label:"TCWS #3" },
-    { signal:2, min:62,  label:"TCWS #2" },
-    { signal:1, min:39,  label:"TCWS #1" },
+    { signal:5, min:185, label:"TCWS #5", range:"185 km/h or higher", lead:"12 hours before onset", category:"Super Typhoon",        impact:"<strong>Catastrophic.</strong> Total devastation of light structures. Almost all traditional utility poles are collapsed or snapped." },
+    { signal:4, min:118, label:"TCWS #4", range:"118 to 184 km/h",    lead:"12 hours before onset", category:"Typhoon",               impact:"<strong>Severe to extensive.</strong> Severe damage to light structures; large trees are uprooted. Power outages are widespread." },
+    { signal:3, min:89,  label:"TCWS #3", range:"89 to 117 km/h",     lead:"18 hours before onset", category:"Severe Tropical Storm", impact:"<strong>Moderate to heavy.</strong> Significant damage to houses made of light materials; many banana plants are downed." },
+    { signal:2, min:62,  label:"TCWS #2", range:"62 to 88 km/h",      lead:"24 hours before onset", category:"Tropical Storm",        impact:"<strong>Minor to moderate.</strong> Light materials can be unroofed. Some old wooden billboards may collapse." },
+    { signal:1, min:39,  label:"TCWS #1", range:"39 to 61 km/h",      lead:"36 hours before onset", category:"Tropical Depression",   impact:"<strong>Minimal to minor.</strong> Makeshift houses may suffer slight damage; twigs on trees might snap." },
   ];
   const LEVEL_RANK = {none:0, yellow:1, orange:2, red:3};
   const H_LEVEL = {
@@ -1057,7 +1061,37 @@
       ? Math.min(continuous.pastAvgMmPerHr, continuous.futureAvgMmPerHr)
       : instantMmPerHr;
 
-    const rainfall = getRainfallLevel(mmPerHr);
+    // PAGASA's bulletins also raise Orange/Red based on *accumulated* rain
+    // over the past 3 hours, independent of the current instantaneous rate
+    // — this is what catches a long, steady drizzle-to-moderate rain event
+    // that never spikes above the hourly-rate thresholds but still adds up
+    // to a flood-triggering total. Without this check, a system that only
+    // ever looks at the current hour's rate can stay stuck on a lower level
+    // (e.g. Hinay/Yellow) all day even while the ground is taking on real,
+    // continuous accumulation — which is the gap being described here.
+    // Thresholds below follow PAGASA's published guidance: Orange when the
+    // past 3 hours accumulate roughly 45–65mm; Red when past 3 hours exceed
+    // ~65mm. The Yellow accumulated floor (22.5mm = 7.5mm/hr x 3h) is our
+    // own conservative extension for symmetry, not an official PAGASA figure.
+    let accumLevel = null;
+    const accum3h = continuous && continuous.past3hTotalMm != null ? continuous.past3hTotalMm : null;
+    if(accum3h != null){
+      if(accum3h >= 65) accumLevel = { level:"red", min:30, label:"Red Rainfall Warning", desc:"" };
+      else if(accum3h >= 45) accumLevel = { level:"orange", min:15, label:"Orange Rainfall Warning", desc:"" };
+      else if(accum3h >= 22.5) accumLevel = { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"" };
+    }
+
+    const rateLevel = getRainfallLevel(mmPerHr);
+    // Combine rate-based and accumulation-based results — take whichever is
+    // more severe, and remember which basis actually triggered it so the
+    // banner text can say "continuous accumulation" instead of "rate".
+    const rainRank = {yellow:1, orange:2, red:3};
+    let rainfall = rateLevel;
+    let accumTriggered = false;
+    if(accumLevel && (!rateLevel || rainRank[accumLevel.level] > rainRank[rateLevel.level])){
+      rainfall = accumLevel;
+      accumTriggered = true;
+    }
     const wind = getWindSignal(windKmh);
 
     // Map wind signal -> DepEd level per DO 14 s.2026
@@ -1090,13 +1124,18 @@
     const reasons = [];
     if(wind) reasons.push(wind.label + " (" + Math.round(windKmh) + " km/h est.)" + (windScope ? " — " + windScope + " suspended" : windLevel!=="none" ? " — ALL levels suspended" : ""));
     if(rainfall){
-      const basis = continuousQualifies
-        ? "continuous ~" + mmPerHr.toFixed(1) + "mm/hr over the past & next 3 hrs"
-        : mmPerHr.toFixed(1) + "mm/hr est.";
+      let basis;
+      if(accumTriggered){
+        basis = accum3h.toFixed(1) + "mm accumulated over the past 3 hrs";
+      }else if(continuousQualifies){
+        basis = "continuous ~" + mmPerHr.toFixed(1) + "mm/hr over the past & next 3 hrs";
+      }else{
+        basis = mmPerHr.toFixed(1) + "mm/hr est.";
+      }
       reasons.push(rainfall.label + " (" + basis + ")" + (rainScope ? " — suspension " + rainScope : rainLevel==="orange"||rainLevel==="red" ? " — ALL levels suspended" : ""));
     }
 
-    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, reasons };
+    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, accumTriggered, accum3h, accum24h: continuous ? continuous.past24hTotalMm : null, reasons };
   }
 
   function advisoryMeta(level){
@@ -1446,11 +1485,20 @@
       const past = sumRange(nowIdx - 2, nowIdx);
       // Next 3 hours after the current hour.
       const future = sumRange(nowIdx + 1, nowIdx + 3);
+      // Actual accumulated totals (not averages) — this is the piece that
+      // was missing before: a rate-only check can stay "clear" all day
+      // during a steady moderate drizzle, even though the ground is
+      // quietly taking on a flood-triggering total. past24h covers the
+      // full trailing day for the Detailed Metrics display.
+      const past3hTotal = sumRange(nowIdx - 2, nowIdx);
+      const past24hTotal = sumRange(nowIdx - 23, nowIdx);
       continuous = {
         pastAvgMmPerHr: past.count ? past.total / past.count : 0,
         pastHours: past.count,
         futureAvgMmPerHr: future.count ? future.total / future.count : 0,
         futureHours: future.count,
+        past3hTotalMm: past3hTotal.count ? past3hTotal.total : null,
+        past24hTotalMm: past24hTotal.count ? past24hTotal.total : null,
       };
     }
 
@@ -1479,11 +1527,13 @@
         daily: "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
         timezone: "Asia/Manila",
         forecast_days: "6",
-        // past_hours pulls in the last 3 actual hours alongside the forecast,
-        // which is what lets computeSuspensionAdvisory() check PAGASA's
-        // "continuous for 3 hours, expected to continue for 3 more" rule
-        // instead of only looking at the current instant.
-        past_hours: "3",
+        // past_hours pulls in actual past hours alongside the forecast. We
+        // request 24 (not just 3) so computeSuspensionAdvisory() can check
+        // both PAGASA's "continuous for 3 hours, expected to continue for 3
+        // more" rate rule AND the separate "accumulated Xmm over the past 3
+        // hours" rule, instead of only looking at the current instant. It
+        // also lets the Detailed Metrics panel show a real 24h rain total.
+        past_hours: "24",
         temperature_unit: "celsius",
         wind_speed_unit: "ms",
         precipitation_unit: "mm",
@@ -1620,6 +1670,26 @@
           <div class="advisory-title">${am.label}</div>
           <div class="advisory-reasons">${advisory.reasons.join(" &nbsp;•&nbsp; ")}</div>
           <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}<br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.</div>
+        </div>
+      </section>`;
+    }
+
+    // TCWS Wind Signal banner — separate from the combined Hinay/Hinga/Hinto
+    // banner above, this shows the wind-only PAGASA signal level whenever
+    // estimated sustained winds reach Signal No. 1+ (39 km/h). Requested
+    // as its own dedicated warning banner rather than being buried only in
+    // the reference table further down the page.
+    if(advisory.wind){
+      const w = advisory.wind;
+      const wColor = w.signal >= 4 ? "#ef4444" : (w.signal === 3 ? "#f97316" : "#eab308");
+      const wBg = w.signal >= 4 ? "rgba(239,68,68,0.16)" : (w.signal === 3 ? "rgba(249,115,22,0.16)" : "rgba(234,179,8,0.16)");
+      const wBorder = w.signal >= 4 ? "rgba(239,68,68,0.5)" : (w.signal === 3 ? "rgba(249,115,22,0.5)" : "rgba(234,179,8,0.5)");
+      html += `<section class="advisory-banner advisory-${w.signal>=4?'red':(w.signal===3?'orange':'yellow')}" style="--adv-color:${wColor};--adv-bg:${wBg};--adv-border:${wBorder}">
+        <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px;stroke:'+wColor+'"')}</div>
+        <div class="advisory-body">
+          <div class="advisory-title">${w.label} — ${w.category} (est. ${Math.round(advisory.windKmh)} km/h sustained)</div>
+          <div class="advisory-reasons">${w.range} &nbsp;•&nbsp; Lead time once declared: ${w.lead}</div>
+          <div class="advisory-sub">${w.impact.replace(/<\/?strong>/g,"")}<br><strong>This is a local estimate from live wind speed data, not an official PAGASA TCWS declaration</strong> — actual signals are issued by PAGASA based on a storm's forecast track, not a single station's current reading. <a href="#guidelines" style="color:${wColor};font-weight:700">See the full TCWS reference table ↓</a></div>
         </div>
       </section>`;
     }
@@ -1944,17 +2014,12 @@
     // card, deliberately separate from the Rainfall Warning info above.
     // Wind signals and rainfall warnings are independent PAGASA systems
     // (see guidelines-intro copy below), so they are kept in their own
-    // sections rather than merged into one table.
-    const TCWS_ROWS = [
-      { signal:"Signal No. 1", speed:"39 to 61 km/h",   lead:"36 hours before onset", category:"Tropical Depression",  impact:"<strong>Minimal to minor.</strong> Makeshift houses may suffer slight damage; twigs on trees might snap." },
-      { signal:"Signal No. 2", speed:"62 to 88 km/h",   lead:"24 hours before onset", category:"Tropical Storm",        impact:"<strong>Minor to moderate.</strong> Light materials can be unroofed. Some old wooden billboards may collapse." },
-      { signal:"Signal No. 3", speed:"89 to 117 km/h",  lead:"18 hours before onset", category:"Severe Tropical Storm", impact:"<strong>Moderate to heavy.</strong> Significant damage to houses made of light materials; many banana plants are downed." },
-      { signal:"Signal No. 4", speed:"118 to 184 km/h", lead:"12 hours before onset", category:"Typhoon",               impact:"<strong>Severe to extensive.</strong> Severe damage to light structures; large trees are uprooted. Power outages are widespread." },
-      { signal:"Signal No. 5", speed:"185 km/h or higher", lead:"12 hours before onset", category:"Super Typhoon",     impact:"<strong>Catastrophic.</strong> Total devastation of light structures. Almost all traditional utility poles are collapsed or snapped." },
-    ];
-    const tcwsRowsHtml = TCWS_ROWS.map(r => `<tr>
-        <td class="tcws-signal-cell">${r.signal}</td>
-        <td>${r.speed}</td>
+    // sections rather than merged into one table. Rows are sourced from the
+    // same WIND_SIGNALS array that drives the live banner above, so the two
+    // can never drift out of sync.
+    const tcwsRowsHtml = WIND_SIGNALS.slice().sort((a,b)=>a.signal-b.signal).map(r => `<tr>
+        <td class="tcws-signal-cell">Signal No. ${r.signal}</td>
+        <td>${r.range}</td>
         <td>${r.lead}</td>
         <td>${r.category}</td>
         <td class="tcws-impact-cell">${r.impact}</td>
@@ -2008,6 +2073,9 @@
     const dewSub = curHum > 70 ? "Sticky feeling" : "Comfortable";
     const rain1h = curRain1 > 0 ? curRain1.toFixed(1) + " mm" : "0 mm";
     const rainSub = curRain1 > 0 ? "Light rain" : "No rain";
+    const rain24 = advisory.accum24h;
+    const rain24Val = rain24 != null ? rain24.toFixed(1) + " mm" : "—";
+    const rain24Sub = rain24 == null ? "No data" : rain24 >= 65 ? "Heavy accumulation" : rain24 >= 30 ? "Moderate accumulation" : rain24 > 0 ? "Light accumulation" : "No rain";
 
     function detailCard(iconBg, iconSvg, label, val, sub){
       return `<div class="detail-card glass-light">
@@ -2028,6 +2096,7 @@
       detailCard("rgba(250,204,21,0.2)", SM.thermoSun.replace('stroke="currentColor"','stroke="#fde047"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "UV Index", uvLabel, uvSub),
       detailCard("rgba(20,184,166,0.2)", SM.compass.replace('stroke="currentColor"','stroke="#5eead4"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Dew Point", dew+"°C", dewSub),
       detailCard("rgba(59,130,246,0.2)", SM.umbrella.replace('stroke="currentColor"','stroke="#93c5fd"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Rain (1h)", rain1h, rainSub),
+      detailCard("rgba(37,99,235,0.22)", SM.umbrella.replace('stroke="currentColor"','stroke="#60a5fa"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Rain (24h accum.)", rain24Val, rain24Sub),
     ].join("");
     html += `<section class="glass details-card">
       <div class="card-title">${SM.gauge.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Detailed Weather Metrics</div>
