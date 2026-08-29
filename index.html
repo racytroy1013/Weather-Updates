@@ -977,10 +977,22 @@
   //   Red Rainfall        -> ALL levels automatically suspended   (Hinto/Red)
   // This panel is a LOCAL ESTIMATE computed from live weather data — it is
   // not an official PAGASA/DepEd/LGU/school head announcement.
+  //
+  // Rainfall thresholds (per PAGASA's published color-coded advisory):
+  //   Yellow  7.5–15 mm in 1 hour   -> Heavy rain, flooding possible in low areas
+  //   Orange  15–30  mm in 1 hour   -> Intense rain, flooding likely, landslides possible
+  //   Red     30+    mm in 1 hour   -> Torrential rain, severe widespread flooding expected
+  // "Continuous" rule: a color is also triggered if rain has fallen at that
+  // rate continuously for the past 3 hours AND is forecast to continue at
+  // that rate for the next 3 hours (see the `continuous` block computed in
+  // adaptOpenMeteo() from actual + forecast hourly precipitation), even if
+  // the current single hour's reading is momentarily lower. This is meant to
+  // catch slow-moving monsoon/storm rain that never spikes in one hour but
+  // still dumps a dangerous, sustained amount of water over time.
   const RAINFALL_LEVELS = [
-    { level:"red",    min:30,  label:"Red Rainfall Warning",    desc:"Very heavy rain (30mm+/hr, or 65mm+ over 3hrs). Serious flooding is threatening." },
-    { level:"orange", min:15,  label:"Orange Rainfall Warning", desc:"Intense rain (15–30mm/hr). Flooding is expected in flood-prone areas." },
-    { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"Heavy rain (7.5–15mm/hr). Flooding is possible in low-lying areas." },
+    { level:"red",    min:30,  label:"Red Rainfall Warning",    desc:"Torrential Rain (30mm+/hr). Severe, widespread flooding is expected. EVACUATE: take immediate action, move to safe ground." },
+    { level:"orange", min:15,  label:"Orange Rainfall Warning", desc:"Intense Rain (15–30mm/hr). Flooding is highly threatening, landslides can occur. PREPARE: be alert and ready to move." },
+    { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"Heavy Rain (7.5–15mm/hr). Flooding is possible in low-lying areas. MONITOR: stay aware, check local conditions." },
   ];
   const WIND_SIGNALS = [
     { signal:5, min:185, label:"TCWS #5" },
@@ -1006,11 +1018,28 @@
     return null;
   }
 
-  function computeSuspensionAdvisory(cur){
+  function computeSuspensionAdvisory(cur, continuous){
     const rain1h = num(safe(cur, "rain.1h"), null);
     const rain3h = num(safe(cur, "rain.3h"), null);
-    const mmPerHr = rain1h!=null ? rain1h : (rain3h!=null ? rain3h/3 : 0);
+    const instantMmPerHr = rain1h!=null ? rain1h : (rain3h!=null ? rain3h/3 : 0);
     const windKmh = num(safe(cur, "wind.speed"), 0) * 3.6;
+
+    // PAGASA's rainfall-warning table is defined by mm in a single hour, but
+    // PAGASA also triggers the same color if rain has been falling at a
+    // qualifying rate continuously for the past 3 hours AND is expected to
+    // keep falling for the next 3 hours — meant to catch slow-moving storms
+    // that never spike in any single hour but still soak the area over time.
+    // We treat the "effective" rain rate for warning purposes as whichever
+    // is higher: this instant's reading, or that sustained 3h-past/3h-future
+    // average (when we have real past+forecast hourly data for it).
+    let continuousQualifies = false;
+    if(continuous && continuous.pastHours >= 3 && continuous.futureHours >= 3){
+      const sustainedRate = Math.min(continuous.pastAvgMmPerHr, continuous.futureAvgMmPerHr);
+      if(sustainedRate > instantMmPerHr) continuousQualifies = true;
+    }
+    const mmPerHr = continuousQualifies
+      ? Math.min(continuous.pastAvgMmPerHr, continuous.futureAvgMmPerHr)
+      : instantMmPerHr;
 
     const rainfall = getRainfallLevel(mmPerHr);
     const wind = getWindSignal(windKmh);
@@ -1044,9 +1073,14 @@
 
     const reasons = [];
     if(wind) reasons.push(wind.label + " (" + Math.round(windKmh) + " km/h est.)" + (windScope ? " — " + windScope + " suspended" : windLevel!=="none" ? " — ALL levels suspended" : ""));
-    if(rainfall) reasons.push(rainfall.label + " (" + mmPerHr.toFixed(1) + "mm/hr est.)" + (rainScope ? " — suspension " + rainScope : rainLevel==="orange"||rainLevel==="red" ? " — ALL levels suspended" : ""));
+    if(rainfall){
+      const basis = continuousQualifies
+        ? "continuous ~" + mmPerHr.toFixed(1) + "mm/hr over the past & next 3 hrs"
+        : mmPerHr.toFixed(1) + "mm/hr est.";
+      reasons.push(rainfall.label + " (" + basis + ")" + (rainScope ? " — suspension " + rainScope : rainLevel==="orange"||rainLevel==="red" ? " — ALL levels suspended" : ""));
+    }
 
-    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, reasons };
+    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, reasons };
   }
 
   function advisoryMeta(level){
@@ -1366,10 +1400,48 @@
       });
     }
 
+    // Support for PAGASA's "continuous rain" rule: a color is also warranted
+    // if rain has been falling at a qualifying intensity continuously for the
+    // past 3 hours AND is forecast to keep falling for the next 3 hours, even
+    // if the current single hour's reading dips below the threshold. This
+    // needs actual hourly precipitation (mm) around "now", which the
+    // request's past_hours=3 parameter provides in h.precipitation.
+    let continuous = null;
+    if(Array.isArray(h.precipitation) && times.length){
+      const nowMs = cu.time ? new Date(cu.time).getTime() : Date.now();
+      // Nearest hourly index to "now" (Open-Meteo's current.time falls on an
+      // hour boundary already, but match defensively in case it doesn't).
+      let nowIdx = 0;
+      let bestDiff = Infinity;
+      for(let i=0;i<times.length;i++){
+        const diff = Math.abs(new Date(times[i]).getTime() - nowMs);
+        if(diff < bestDiff){ bestDiff = diff; nowIdx = i; }
+      }
+      const sumRange = (startIdx, endIdx) => {
+        // inclusive range, clamped to array bounds
+        let total = 0, count = 0;
+        for(let i=Math.max(0,startIdx); i<=Math.min(h.precipitation.length-1, endIdx); i++){
+          total += num(h.precipitation[i], 0);
+          count++;
+        }
+        return { total, count };
+      };
+      // Past 3 hours ending at (and including) the current hour.
+      const past = sumRange(nowIdx - 2, nowIdx);
+      // Next 3 hours after the current hour.
+      const future = sumRange(nowIdx + 1, nowIdx + 3);
+      continuous = {
+        pastAvgMmPerHr: past.count ? past.total / past.count : 0,
+        pastHours: past.count,
+        futureAvgMmPerHr: future.count ? future.total / future.count : 0,
+        futureHours: future.count,
+      };
+    }
+
     // Open-Meteo has no built-in severe-weather-alerts feed; the Class
     // Suspension Advisory panel (computed locally from live rain/wind data)
     // covers that role instead — see computeSuspensionAdvisory().
-    return { current, forecast: { list }, alerts: undefined };
+    return { current, forecast: { list }, continuous, alerts: undefined };
   }
 
 
@@ -1391,6 +1463,11 @@
         daily: "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
         timezone: "Asia/Manila",
         forecast_days: "6",
+        // past_hours pulls in the last 3 actual hours alongside the forecast,
+        // which is what lets computeSuspensionAdvisory() check PAGASA's
+        // "continuous for 3 hours, expected to continue for 3 more" rule
+        // instead of only looking at the current instant.
+        past_hours: "3",
         temperature_unit: "celsius",
         wind_speed_unit: "ms",
         precipitation_unit: "mm",
@@ -1462,7 +1539,7 @@
     body.classList.add(getWeatherClass(cond.id, isNight));
 
     // Class Suspension Advisory — DepEd Order No. 14, s. 2026 (4H Learning Continuity Framework)
-    const advisory = computeSuspensionAdvisory(cur);
+    const advisory = computeSuspensionAdvisory(cur, safe(d, "continuous", null));
     const am = advisoryMeta(advisory.level);
 
     // Open-Meteo has no built-in severe-weather-alerts feed, so when the
