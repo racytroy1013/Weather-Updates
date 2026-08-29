@@ -304,11 +304,8 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
         <span>Alerts</span><span class="badge-new" id="navAlertCount">2</span>
       </a>
-      <a href="#guidelines">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        <span>Guidelines</span>
-      </a>
     </nav>
+
     <button class="config-btn" id="openConfigBtn" title="Weather API Settings" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
@@ -1045,21 +1042,29 @@
     const windKmh = num(safe(cur, "wind.speed"), 0) * 3.6;
 
     // PAGASA's rainfall-warning table is defined by mm in a single hour, but
-    // PAGASA also triggers the same color if rain has been falling at a
-    // qualifying rate continuously for the past 3 hours AND is expected to
-    // keep falling for the next 3 hours — meant to catch slow-moving storms
-    // that never spike in any single hour but still soak the area over time.
-    // We treat the "effective" rain rate for warning purposes as whichever
-    // is higher: this instant's reading, or that sustained 3h-past/3h-future
-    // average (when we have real past+forecast hourly data for it).
-    let continuousQualifies = false;
-    if(continuous && continuous.pastHours >= 3 && continuous.futureHours >= 3){
-      const sustainedRate = Math.min(continuous.pastAvgMmPerHr, continuous.futureAvgMmPerHr);
-      if(sustainedRate > instantMmPerHr) continuousQualifies = true;
-    }
-    const mmPerHr = continuousQualifies
-      ? Math.min(continuous.pastAvgMmPerHr, continuous.futureAvgMmPerHr)
-      : instantMmPerHr;
+    // PAGASA also raises the same color if a qualifying rate has been
+    // sustained over the past 3 hours, OR is forecast to hold for the next 3
+    // hours — either one is enough on its own. (Previously this required
+    // BOTH the past AND the future window to independently qualify before
+    // overriding the current instant reading, which meant a real, currently
+    // -heavy rain event could get diluted away to "no warning" if the
+    // longer-window average came out lower — e.g. Open-Meteo's "current"
+    // precipitation value only reflects the partial current hour so far,
+    // which under-reports right after the top of the hour.) We now just take
+    // whichever of these three is highest: the current instant reading, the
+    // actual past-3h sustained rate, or Open-Meteo's forecast for the
+    // complete next 3 hours.
+    const pastRate = (continuous && continuous.pastHours >= 3) ? continuous.pastAvgMmPerHr : 0;
+    const futureRate = (continuous && continuous.futureHours >= 3) ? continuous.futureAvgMmPerHr : 0;
+    const rateCandidates = [
+      { basis:"current",  value: instantMmPerHr },
+      { basis:"past",     value: pastRate },
+      { basis:"forecast", value: futureRate },
+    ];
+    rateCandidates.sort((a,b) => b.value - a.value);
+    const mmPerHr = rateCandidates[0].value;
+    const rateBasis = rateCandidates[0].basis;
+    const continuousQualifies = rateBasis !== "current";
 
     // PAGASA's bulletins also raise Orange/Red based on *accumulated* rain
     // over the past 3 hours, independent of the current instantaneous rate
@@ -1127,15 +1132,17 @@
       let basis;
       if(accumTriggered){
         basis = accum3h.toFixed(1) + "mm accumulated over the past 3 hrs";
-      }else if(continuousQualifies){
-        basis = "continuous ~" + mmPerHr.toFixed(1) + "mm/hr over the past & next 3 hrs";
+      }else if(rateBasis === "forecast"){
+        basis = "~" + mmPerHr.toFixed(1) + "mm/hr forecast over the next 3 hrs";
+      }else if(rateBasis === "past"){
+        basis = "~" + mmPerHr.toFixed(1) + "mm/hr sustained over the past 3 hrs";
       }else{
         basis = mmPerHr.toFixed(1) + "mm/hr est.";
       }
       reasons.push(rainfall.label + " (" + basis + ")" + (rainScope ? " — suspension " + rainScope : rainLevel==="orange"||rainLevel==="red" ? " — ALL levels suspended" : ""));
     }
 
-    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, accumTriggered, accum3h, accum24h: continuous ? continuous.past24hTotalMm : null, reasons };
+    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, rateBasis, accumTriggered, accum3h, accum24h: continuous ? continuous.past24hTotalMm : null, reasons };
   }
 
   function advisoryMeta(level){
@@ -1674,23 +1681,57 @@
       </section>`;
     }
 
-    // TCWS Wind Signal banner — separate from the combined Hinay/Hinga/Hinto
-    // banner above, this shows the wind-only PAGASA signal level whenever
-    // estimated sustained winds reach Signal No. 1+ (39 km/h). Requested
-    // as its own dedicated warning banner rather than being buried only in
-    // the reference table further down the page.
+    // TCWS Wind Signal banner — replaces the old always-visible Guidelines
+    // card. It only renders when a signal is actually active (mirroring how
+    // the Rainfall Warning banner above only shows for an active rain
+    // level), and carries the full explainer + reference table inline so
+    // nothing is lost by dropping the static section.
     if(advisory.wind){
       const w = advisory.wind;
       const wColor = w.signal >= 4 ? "#ef4444" : (w.signal === 3 ? "#f97316" : "#eab308");
       const wBg = w.signal >= 4 ? "rgba(239,68,68,0.16)" : (w.signal === 3 ? "rgba(249,115,22,0.16)" : "rgba(234,179,8,0.16)");
       const wBorder = w.signal >= 4 ? "rgba(239,68,68,0.5)" : (w.signal === 3 ? "rgba(249,115,22,0.5)" : "rgba(234,179,8,0.5)");
-      html += `<section class="advisory-banner advisory-${w.signal>=4?'red':(w.signal===3?'orange':'yellow')}" style="--adv-color:${wColor};--adv-bg:${wBg};--adv-border:${wBorder}">
-        <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px;stroke:'+wColor+'"')}</div>
-        <div class="advisory-body">
-          <div class="advisory-title">${w.label} — ${w.category} (est. ${Math.round(advisory.windKmh)} km/h sustained)</div>
-          <div class="advisory-reasons">${w.range} &nbsp;•&nbsp; Lead time once declared: ${w.lead}</div>
-          <div class="advisory-sub">${w.impact.replace(/<\/?strong>/g,"")}<br><strong>This is a local estimate from live wind speed data, not an official PAGASA TCWS declaration</strong> — actual signals are issued by PAGASA based on a storm's forecast track, not a single station's current reading. <a href="#guidelines" style="color:${wColor};font-weight:700">See the full TCWS reference table ↓</a></div>
+      const tcwsRowsHtml = WIND_SIGNALS.slice().sort((a,b)=>a.signal-b.signal).map(r => `<tr${r.signal===w.signal?' style="background:rgba(255,255,255,0.08)"':''}>
+          <td class="tcws-signal-cell">Signal No. ${r.signal}</td>
+          <td>${r.range}</td>
+          <td>${r.lead}</td>
+          <td>${r.category}</td>
+          <td class="tcws-impact-cell">${r.impact}</td>
+        </tr>`).join("");
+      html += `<section id="guidelines" class="advisory-banner advisory-${w.signal>=4?'red':(w.signal===3?'orange':'yellow')}" style="--adv-color:${wColor};--adv-bg:${wBg};--adv-border:${wBorder};flex-direction:column;align-items:stretch">
+        <div style="display:flex;gap:0.85rem;align-items:flex-start">
+          <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px;stroke:'+wColor+'"')}</div>
+          <div class="advisory-body">
+            <div class="advisory-title">${w.label} — ${w.category} (est. ${Math.round(advisory.windKmh)} km/h sustained)</div>
+            <div class="advisory-reasons">${w.range} &nbsp;•&nbsp; Lead time once declared: ${w.lead}</div>
+            <div class="advisory-sub">${w.impact.replace(/<\/?strong>/g,"")}<br><strong>This is a local estimate from live wind speed data, not an official PAGASA TCWS declaration</strong> — actual signals are issued by PAGASA based on a storm's forecast track, not a single station's current reading.</div>
+          </div>
         </div>
+        <div class="guidelines-intro" style="margin-top:1rem">
+          DOST-PAGASA uses the Tropical Cyclone Wind Signal (TCWS) system, which scales from Signal No. 1 to Signal No. 5.
+          Unlike the heavy rainfall warning above — which focuses entirely on <strong>localized rain volume</strong> —
+          the wind signal measures <strong>maximum sustained wind speeds</strong> expected in a specific area within a
+          given timeframe (lead time) as a tropical cyclone approaches.
+        </div>
+        <ul class="guideline-list">
+          <li><span class="gl-bullet">⏱️</span><span><strong>The "Lead Time" Countdown:</strong> a signal doesn't mean strong winds are happening right now — it means winds of that speed are expected to arrive within the lead time shown, giving communities a window to prepare.</span></li>
+          <li><span class="gl-bullet">🌬️🌧️</span><span><strong>Wind vs. Rain Is Independent:</strong> a slow-moving Tropical Depression might only trigger Signal No. 1 for winds, but it could simultaneously dump massive amounts of continuous water, triggering a Red Heavy Rainfall Warning. Always track both indicators during a storm.</span></li>
+        </ul>
+        <div class="tcws-table-wrap">
+          <table class="tcws-table">
+            <thead>
+              <tr>
+                <th>Wind Signal</th>
+                <th>Wind Speeds (km/h)</th>
+                <th>Warning Lead Time</th>
+                <th>Typical Storm Category</th>
+                <th>Potential Structural Impact</th>
+              </tr>
+            </thead>
+            <tbody>${tcwsRowsHtml}</tbody>
+          </table>
+        </div>
+        <div class="guidelines-footnote">Reference table based on DOST-PAGASA's published Tropical Cyclone Wind Signal definitions — always confirm the currently active signal directly via PAGASA's official bulletins.</div>
       </section>`;
     }
 
@@ -2008,49 +2049,6 @@
           ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
         </a>
       </div>
-    </section>`;
-
-    // TCWS (Tropical Cyclone Wind Signal) explainer — a static reference
-    // card, deliberately separate from the Rainfall Warning info above.
-    // Wind signals and rainfall warnings are independent PAGASA systems
-    // (see guidelines-intro copy below), so they are kept in their own
-    // sections rather than merged into one table. Rows are sourced from the
-    // same WIND_SIGNALS array that drives the live banner above, so the two
-    // can never drift out of sync.
-    const tcwsRowsHtml = WIND_SIGNALS.slice().sort((a,b)=>a.signal-b.signal).map(r => `<tr>
-        <td class="tcws-signal-cell">Signal No. ${r.signal}</td>
-        <td>${r.range}</td>
-        <td>${r.lead}</td>
-        <td>${r.category}</td>
-        <td class="tcws-impact-cell">${r.impact}</td>
-      </tr>`).join("");
-    html += `<section id="guidelines" class="glass guidelines-card">
-      <div class="card-title">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Tropical Cyclone Wind Signal (TCWS)</div>
-      <div class="guidelines-intro">
-        DOST-PAGASA uses the Tropical Cyclone Wind Signal (TCWS) system, which scales from Signal No. 1 to Signal No. 5.
-        Unlike the heavy rainfall warning system above — which focuses entirely on <strong>localized rain volume</strong> —
-        the wind signal measures <strong>maximum sustained wind speeds</strong> expected in a specific area within a
-        given timeframe (lead time) as a tropical cyclone approaches.
-      </div>
-      <ul class="guideline-list">
-        <li><span class="gl-bullet">⏱️</span><span><strong>The "Lead Time" Countdown:</strong> if an area is placed under Signal No. 1, it doesn't mean strong winds are happening right now. It means winds of that speed are expected to arrive within 36 hours, giving communities a clear window to prepare.</span></li>
-        <li><span class="gl-bullet">🌬️🌧️</span><span><strong>Wind vs. Rain Is Independent:</strong> a slow-moving Tropical Depression might only trigger Signal No. 1 for winds, but it could simultaneously dump massive amounts of continuous water, triggering a Red Heavy Rainfall Alert. Always track both indicators during a storm.</span></li>
-      </ul>
-      <div class="tcws-table-wrap">
-        <table class="tcws-table">
-          <thead>
-            <tr>
-              <th>Wind Signal</th>
-              <th>Wind Speeds (km/h)</th>
-              <th>Warning Lead Time</th>
-              <th>Typical Storm Category</th>
-              <th>Potential Structural Impact</th>
-            </tr>
-          </thead>
-          <tbody>${tcwsRowsHtml}</tbody>
-        </table>
-      </div>
-      <div class="guidelines-footnote">Reference table based on DOST-PAGASA's published Tropical Cyclone Wind Signal definitions. This is educational reference material, kept separate from the live Heavy Rainfall Warning info elsewhere on this page — always confirm current signals directly via PAGASA's official bulletins.</div>
     </section>`;
 
     // Detailed metrics
