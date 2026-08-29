@@ -202,22 +202,6 @@
   .detail-val{font-size:1.15rem;font-weight:800;margin-bottom:0.2rem}
   .detail-sub{font-size:0.7rem;color:rgba(255,255,255,0.5)}
 
-  .guidelines-card{padding:1.25rem;margin-bottom:1.5rem}
-  .guidelines-intro{font-size:0.9rem;line-height:1.65;color:rgba(255,255,255,0.85);margin-bottom:1rem}
-  .guidelines-intro strong{color:#fff}
-  .guideline-list{list-style:none;display:flex;flex-direction:column;gap:0.65rem;margin-bottom:1.25rem}
-  .guideline-list li{display:flex;gap:0.65rem;align-items:flex-start;font-size:0.85rem;line-height:1.55;color:rgba(255,255,255,0.85);padding:0.75rem 0.9rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:0.65rem}
-  .guideline-list .gl-bullet{flex-shrink:0;font-size:1rem;line-height:1}
-  .guideline-list strong{color:#fde68a}
-  .tcws-table-wrap{overflow-x:auto;border-radius:0.75rem;border:1px solid rgba(255,255,255,0.12)}
-  table.tcws-table{width:100%;border-collapse:collapse;font-size:0.82rem;min-width:640px}
-  table.tcws-table thead th{text-align:left;padding:0.7rem 0.85rem;background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.65);font-size:0.7rem;letter-spacing:0.05em;text-transform:uppercase;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.12)}
-  table.tcws-table tbody td{padding:0.85rem;vertical-align:top;border-bottom:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.85);line-height:1.5}
-  table.tcws-table tbody tr:last-child td{border-bottom:none}
-  table.tcws-table tbody tr:hover{background:rgba(255,255,255,0.04)}
-  .tcws-signal-cell{font-weight:800;white-space:nowrap}
-  .tcws-impact-cell strong{color:#fff}
-  .guidelines-footnote{margin-top:1rem;font-size:0.72rem;color:rgba(255,255,255,0.45);line-height:1.5}
   .refresh-meta{display:flex;align-items:center;justify-content:center;gap:0.5rem;padding:1rem;color:rgba(255,255,255,0.5);font-size:0.75rem}
   .refresh-meta svg{width:0.85rem;height:0.85rem}
 
@@ -1040,11 +1024,27 @@
     const rain3h = num(safe(cur, "rain.3h"), null);
     const instantMmPerHr = rain1h!=null ? rain1h : (rain3h!=null ? rain3h/3 : 0);
     const windKmh = num(safe(cur, "wind.speed"), 0) * 3.6;
+    // Gusts as a supplementary caution signal. PAGASA's TCWS is officially
+    // based on SUSTAINED wind, so a gust alone never bumps the official
+    // level — but gusts routinely run 30-50% above sustained speed, and can
+    // reach a higher signal's range well before sustained wind does. We
+    // surface that gap so the banner can warn "conditions may already feel
+    // like a higher signal" instead of silently sitting on a lower one.
+    const gustKmh = num(safe(cur, "wind.gust"), num(safe(cur, "wind.speed"), 0)) * 3.6;
+
+    // 6-hour-ahead wind prediction: use whichever is higher, the current
+    // sustained reading or the peak sustained speed the forecast model
+    // expects in the next 6 hours — so the TCWS banner can show a signal
+    // *before* it technically arrives at the station, not just once it does.
+    const windPredictHours = continuous && continuous.windPredictHours ? continuous.windPredictHours : 6;
+    const predictedWindKmh = continuous && continuous.futureWindMaxKmh != null ? continuous.futureWindMaxKmh : 0;
+    const effectiveWindKmh = Math.max(windKmh, predictedWindKmh);
+    const windIsPredicted = effectiveWindKmh > windKmh;
 
     // PAGASA's rainfall-warning table is defined by mm in a single hour, but
     // PAGASA also raises the same color if a qualifying rate has been
-    // sustained over the past 3 hours, OR is forecast to hold for the next 3
-    // hours — either one is enough on its own. (Previously this required
+    // sustained over the recent past, OR is forecast to hold for a stretch
+    // ahead — either one is enough on its own. (Previously this required
     // BOTH the past AND the future window to independently qualify before
     // overriding the current instant reading, which meant a real, currently
     // -heavy rain event could get diluted away to "no warning" if the
@@ -1052,10 +1052,13 @@
     // precipitation value only reflects the partial current hour so far,
     // which under-reports right after the top of the hour.) We now just take
     // whichever of these three is highest: the current instant reading, the
-    // actual past-3h sustained rate, or Open-Meteo's forecast for the
-    // complete next 3 hours.
-    const pastRate = (continuous && continuous.pastHours >= 3) ? continuous.pastAvgMmPerHr : 0;
-    const futureRate = (continuous && continuous.futureHours >= 3) ? continuous.futureAvgMmPerHr : 0;
+    // actual sustained rate over the past window, or Open-Meteo's forecast
+    // for the window ahead. Window size (CONT_WINDOW_HOURS, currently 5h —
+    // widened from 3h per request) is set in adaptOpenMeteo() and carried
+    // through on the `continuous` object.
+    const windowHours = continuous && continuous.accumWindowHours ? continuous.accumWindowHours : 5;
+    const pastRate = (continuous && continuous.pastHours >= windowHours) ? continuous.pastAvgMmPerHr : 0;
+    const futureRate = (continuous && continuous.futureHours >= windowHours) ? continuous.futureAvgMmPerHr : 0;
     const rateCandidates = [
       { basis:"current",  value: instantMmPerHr },
       { basis:"past",     value: pastRate },
@@ -1067,23 +1070,25 @@
     const continuousQualifies = rateBasis !== "current";
 
     // PAGASA's bulletins also raise Orange/Red based on *accumulated* rain
-    // over the past 3 hours, independent of the current instantaneous rate
-    // — this is what catches a long, steady drizzle-to-moderate rain event
+    // over a recent window, independent of the current instantaneous rate —
+    // this is what catches a long, steady drizzle-to-moderate rain event
     // that never spikes above the hourly-rate thresholds but still adds up
     // to a flood-triggering total. Without this check, a system that only
     // ever looks at the current hour's rate can stay stuck on a lower level
     // (e.g. Hinay/Yellow) all day even while the ground is taking on real,
     // continuous accumulation — which is the gap being described here.
-    // Thresholds below follow PAGASA's published guidance: Orange when the
-    // past 3 hours accumulate roughly 45–65mm; Red when past 3 hours exceed
-    // ~65mm. The Yellow accumulated floor (22.5mm = 7.5mm/hr x 3h) is our
-    // own conservative extension for symmetry, not an official PAGASA figure.
+    // PAGASA's own published figures are for a 3-hour window (Orange
+    // ~45–65mm, Red 65mm+); scaled up proportionally here to match the wider
+    // windowHours (5h by default: ~75mm Orange, ~108mm Red). This scaling —
+    // and the Yellow floor — are our own extension, not an official PAGASA
+    // figure at non-3-hour windows.
     let accumLevel = null;
-    const accum3h = continuous && continuous.past3hTotalMm != null ? continuous.past3hTotalMm : null;
-    if(accum3h != null){
-      if(accum3h >= 65) accumLevel = { level:"red", min:30, label:"Red Rainfall Warning", desc:"" };
-      else if(accum3h >= 45) accumLevel = { level:"orange", min:15, label:"Orange Rainfall Warning", desc:"" };
-      else if(accum3h >= 22.5) accumLevel = { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"" };
+    const accumScale = windowHours / 3;
+    const accumWindowMm = continuous && continuous.accumWindowTotalMm != null ? continuous.accumWindowTotalMm : null;
+    if(accumWindowMm != null){
+      if(accumWindowMm >= 65 * accumScale) accumLevel = { level:"red", min:30, label:"Red Rainfall Warning", desc:"" };
+      else if(accumWindowMm >= 45 * accumScale) accumLevel = { level:"orange", min:15, label:"Orange Rainfall Warning", desc:"" };
+      else if(accumWindowMm >= 22.5 * accumScale) accumLevel = { level:"yellow", min:7.5, label:"Yellow Rainfall Warning", desc:"" };
     }
 
     const rateLevel = getRainfallLevel(mmPerHr);
@@ -1097,7 +1102,12 @@
       rainfall = accumLevel;
       accumTriggered = true;
     }
-    const wind = getWindSignal(windKmh);
+    const wind = getWindSignal(effectiveWindKmh);
+    const gustSignal = getWindSignal(gustKmh);
+    // True only when gusts reach a *higher* signal tier than sustained wind
+    // has — i.e. there's a real gap worth flagging, not just gusts sitting
+    // a bit above sustained within the same tier.
+    const gustExceedsSustained = gustSignal && (!wind || gustSignal.signal > wind.signal);
 
     // Map wind signal -> DepEd level per DO 14 s.2026
     let windLevel = "none";
@@ -1127,22 +1137,26 @@
     const autoAllLevels = (level === "orange" || level === "red");
 
     const reasons = [];
-    if(wind) reasons.push(wind.label + " (" + Math.round(windKmh) + " km/h est.)" + (windScope ? " — " + windScope + " suspended" : windLevel!=="none" ? " — ALL levels suspended" : ""));
+    if(wind) reasons.push(wind.label + " (" + Math.round(effectiveWindKmh) + " km/h " + (windIsPredicted ? ("forecast within " + windPredictHours + "h") : "est.") + ")" + (windScope ? " — " + windScope + " suspended" : windLevel!=="none" ? " — ALL levels suspended" : ""));
+    if(gustExceedsSustained){
+      reasons.push("⚠️ Gusts reaching ~" + Math.round(gustKmh) + " km/h — equivalent to " + gustSignal.label + " (" + gustSignal.category + "), though sustained wind hasn't reached that level yet.");
+    }
     if(rainfall){
       let basis;
       if(accumTriggered){
-        basis = accum3h.toFixed(1) + "mm accumulated over the past 3 hrs";
+        basis = accumWindowMm.toFixed(1) + "mm accumulated over the past " + windowHours + " hrs";
       }else if(rateBasis === "forecast"){
-        basis = "~" + mmPerHr.toFixed(1) + "mm/hr forecast over the next 3 hrs";
+        const popTxt = (continuous && continuous.futureAvgPop != null) ? ", " + Math.round(continuous.futureAvgPop) + "% chance of rain" : "";
+        basis = "~" + mmPerHr.toFixed(1) + "mm/hr forecast over the next " + windowHours + " hrs" + popTxt;
       }else if(rateBasis === "past"){
-        basis = "~" + mmPerHr.toFixed(1) + "mm/hr sustained over the past 3 hrs";
+        basis = "~" + mmPerHr.toFixed(1) + "mm/hr sustained over the past " + windowHours + " hrs";
       }else{
         basis = mmPerHr.toFixed(1) + "mm/hr est.";
       }
       reasons.push(rainfall.label + " (" + basis + ")" + (rainScope ? " — suspension " + rainScope : rainLevel==="orange"||rainLevel==="red" ? " — ALL levels suspended" : ""));
     }
 
-    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, continuousQualifies, rateBasis, accumTriggered, accum3h, accum24h: continuous ? continuous.past24hTotalMm : null, reasons };
+    return { level, hLevel:h, autoAllLevels, rainfall, wind, windScope, rainScope, mmPerHr, windKmh, effectiveWindKmh, windIsPredicted, windPredictHours, gustKmh, gustSignal, gustExceedsSustained, continuousQualifies, rateBasis, windowHours, futureAvgPop: continuous ? continuous.futureAvgPop : null, accumTriggered, accumWindowMm, accum24h: continuous ? continuous.past24hTotalMm : null, reasons };
   }
 
   function advisoryMeta(level){
@@ -1464,10 +1478,13 @@
 
     // Support for PAGASA's "continuous rain" rule: a color is also warranted
     // if rain has been falling at a qualifying intensity continuously for the
-    // past 3 hours AND is forecast to keep falling for the next 3 hours, even
-    // if the current single hour's reading dips below the threshold. This
-    // needs actual hourly precipitation (mm) around "now", which the
-    // request's past_hours=3 parameter provides in h.precipitation.
+    // recent past AND/OR is forecast to keep falling for a stretch ahead,
+    // even if the current single hour's reading dips below the threshold.
+    // Window widened from 3 to 5 hours (per request) since a 3-hour window
+    // was still getting diluted by drier hours at its edges and missing a
+    // real, ongoing event. This needs actual hourly precipitation (mm)
+    // around "now", which the request's past_hours=24 parameter provides.
+    const CONT_WINDOW_HOURS = 5;
     let continuous = null;
     if(Array.isArray(h.precipitation) && times.length){
       const nowMs = cu.time ? new Date(cu.time).getTime() : Date.now();
@@ -1488,24 +1505,66 @@
         }
         return { total, count };
       };
-      // Past 3 hours ending at (and including) the current hour.
-      const past = sumRange(nowIdx - 2, nowIdx);
-      // Next 3 hours after the current hour.
-      const future = sumRange(nowIdx + 1, nowIdx + 3);
+      // Past N hours ending at (and including) the current hour.
+      const past = sumRange(nowIdx - (CONT_WINDOW_HOURS - 1), nowIdx);
+      // Next N hours after the current hour.
+      const future = sumRange(nowIdx + 1, nowIdx + CONT_WINDOW_HOURS);
       // Actual accumulated totals (not averages) — this is the piece that
       // was missing before: a rate-only check can stay "clear" all day
       // during a steady moderate drizzle, even though the ground is
       // quietly taking on a flood-triggering total. past24h covers the
-      // full trailing day for the Detailed Metrics display.
-      const past3hTotal = sumRange(nowIdx - 2, nowIdx);
+      // full trailing day for the Detailed Metrics display. The accumulated
+      // window also uses CONT_WINDOW_HOURS (5h) now, with thresholds scaled
+      // up proportionally from PAGASA's official 3-hour figures (45mm/65mm).
+      const pastAccumTotal = sumRange(nowIdx - (CONT_WINDOW_HOURS - 1), nowIdx);
       const past24hTotal = sumRange(nowIdx - 23, nowIdx);
+
+      // Precipitation probability (POP) over the same forecast window, as a
+      // confidence signal for the forecast-based trigger — purely
+      // informational (doesn't gate/suppress a warning), shown alongside
+      // the forecasted rate so it's clear how confident the model is.
+      let futureAvgPop = null;
+      if(Array.isArray(h.precipitation_probability)){
+        const sumPop = (startIdx, endIdx) => {
+          let total = 0, count = 0;
+          for(let i=Math.max(0,startIdx); i<=Math.min(h.precipitation_probability.length-1, endIdx); i++){
+            const v = h.precipitation_probability[i];
+            if(v != null){ total += num(v,0); count++; }
+          }
+          return count ? total/count : null;
+        };
+        futureAvgPop = sumPop(nowIdx + 1, nowIdx + CONT_WINDOW_HOURS);
+      }
+
+      // Wind speed forecast — a 6-hour-ahead lookahead so the TCWS banner
+      // can reflect an approaching signal before it's technically hit the
+      // station yet (mirrors PAGASA's own lead-time concept, computed
+      // locally from the forecast model instead of a declared bulletin).
+      // We take the MAX hourly forecast wind speed in that window (not an
+      // average) since what matters for classification is the peak
+      // sustained speed expected to occur, not a smoothed mean.
+      const WIND_PREDICT_HOURS = 6;
+      let futureWindMaxKmh = null;
+      if(Array.isArray(h.wind_speed_10m)){
+        let maxV = null;
+        for(let i=nowIdx+1; i<=Math.min(h.wind_speed_10m.length-1, nowIdx+WIND_PREDICT_HOURS); i++){
+          const v = h.wind_speed_10m[i];
+          if(v != null && (maxV == null || v > maxV)) maxV = v;
+        }
+        futureWindMaxKmh = maxV != null ? maxV * 3.6 : null;
+      }
+
       continuous = {
         pastAvgMmPerHr: past.count ? past.total / past.count : 0,
         pastHours: past.count,
         futureAvgMmPerHr: future.count ? future.total / future.count : 0,
         futureHours: future.count,
-        past3hTotalMm: past3hTotal.count ? past3hTotal.total : null,
+        futureAvgPop,
+        accumWindowHours: CONT_WINDOW_HOURS,
+        accumWindowTotalMm: pastAccumTotal.count ? pastAccumTotal.total : null,
         past24hTotalMm: past24hTotal.count ? past24hTotal.total : null,
+        windPredictHours: WIND_PREDICT_HOURS,
+        futureWindMaxKmh,
       };
     }
 
@@ -1681,57 +1740,34 @@
       </section>`;
     }
 
-    // TCWS Wind Signal banner — replaces the old always-visible Guidelines
-    // card. It only renders when a signal is actually active (mirroring how
-    // the Rainfall Warning banner above only shows for an active rain
-    // level), and carries the full explainer + reference table inline so
-    // nothing is lost by dropping the static section.
+    // TCWS Wind Signal banner — shows ONLY the single matching signal
+    // (No. 1-5) for the current/predicted wind speed. No intro paragraph,
+    // no bullet list, no full reference table — just the compact card.
     if(advisory.wind){
       const w = advisory.wind;
       const wColor = w.signal >= 4 ? "#ef4444" : (w.signal === 3 ? "#f97316" : "#eab308");
       const wBg = w.signal >= 4 ? "rgba(239,68,68,0.16)" : (w.signal === 3 ? "rgba(249,115,22,0.16)" : "rgba(234,179,8,0.16)");
       const wBorder = w.signal >= 4 ? "rgba(239,68,68,0.5)" : (w.signal === 3 ? "rgba(249,115,22,0.5)" : "rgba(234,179,8,0.5)");
-      const tcwsRowsHtml = WIND_SIGNALS.slice().sort((a,b)=>a.signal-b.signal).map(r => `<tr${r.signal===w.signal?' style="background:rgba(255,255,255,0.08)"':''}>
-          <td class="tcws-signal-cell">Signal No. ${r.signal}</td>
-          <td>${r.range}</td>
-          <td>${r.lead}</td>
-          <td>${r.category}</td>
-          <td class="tcws-impact-cell">${r.impact}</td>
-        </tr>`).join("");
-      html += `<section id="guidelines" class="advisory-banner advisory-${w.signal>=4?'red':(w.signal===3?'orange':'yellow')}" style="--adv-color:${wColor};--adv-bg:${wBg};--adv-border:${wBorder};flex-direction:column;align-items:stretch">
-        <div style="display:flex;gap:0.85rem;align-items:flex-start">
-          <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px;stroke:'+wColor+'"')}</div>
-          <div class="advisory-body">
-            <div class="advisory-title">${w.label} — ${w.category} (est. ${Math.round(advisory.windKmh)} km/h sustained)</div>
-            <div class="advisory-reasons">${w.range} &nbsp;•&nbsp; Lead time once declared: ${w.lead}</div>
-            <div class="advisory-sub">${w.impact.replace(/<\/?strong>/g,"")}<br><strong>This is a local estimate from live wind speed data, not an official PAGASA TCWS declaration</strong> — actual signals are issued by PAGASA based on a storm's forecast track, not a single station's current reading.</div>
-          </div>
+      html += `<section class="advisory-banner advisory-${w.signal>=4?'red':(w.signal===3?'orange':'yellow')}" style="--adv-color:${wColor};--adv-bg:${wBg};--adv-border:${wBorder}">
+        <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px;stroke:'+wColor+'"')}</div>
+        <div class="advisory-body">
+          <div class="advisory-title">${w.label} — ${w.category} (est. ${Math.round(advisory.effectiveWindKmh)} km/h sustained${advisory.windIsPredicted ? ", forecast within " + advisory.windPredictHours + "h" : ""})</div>
+          <div class="advisory-reasons">${w.range} &nbsp;•&nbsp; Lead time once declared: ${w.lead}${advisory.gustKmh ? ` &nbsp;•&nbsp; Gusts up to ~${Math.round(advisory.gustKmh)} km/h` : ""}</div>
+          <div class="advisory-sub">${w.impact.replace(/<\/?strong>/g,"")}<br><strong>This is a local estimate from live wind speed data, not an official PAGASA TCWS declaration</strong> — actual signals are issued by PAGASA based on a storm's forecast track, not a single station's current reading.</div>
         </div>
-        <div class="guidelines-intro" style="margin-top:1rem">
-          DOST-PAGASA uses the Tropical Cyclone Wind Signal (TCWS) system, which scales from Signal No. 1 to Signal No. 5.
-          Unlike the heavy rainfall warning above — which focuses entirely on <strong>localized rain volume</strong> —
-          the wind signal measures <strong>maximum sustained wind speeds</strong> expected in a specific area within a
-          given timeframe (lead time) as a tropical cyclone approaches.
+      </section>`;
+    }else if(advisory.gustExceedsSustained){
+      // Sustained wind hasn't reached Signal No.1 (39 km/h) yet, but gusts
+      // already have — worth a lighter standalone caution even without a
+      // full TCWS-style banner, since gusts alone can snap branches/loose
+      // debris.
+      const gw = advisory.gustSignal;
+      html += `<section class="advisory-banner advisory-yellow" style="--adv-color:#eab308;--adv-bg:rgba(234,179,8,0.14);--adv-border:rgba(234,179,8,0.4)">
+        <div class="advisory-icon">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:22px;height:22px;stroke:#eab308"')}</div>
+        <div class="advisory-body">
+          <div class="advisory-title">Gust Advisory — winds gusting to ~${Math.round(advisory.gustKmh)} km/h</div>
+          <div class="advisory-sub">Sustained wind is still below ${WIND_SIGNALS.find(w=>w.signal===1).label} (39 km/h), but gusts are already reaching ${gw.label}-equivalent speeds (${gw.range}). Loose debris, umbrellas, and small branches can move at gust speeds even when the sustained wind feels calmer. This is a local estimate from live wind data, not an official PAGASA declaration.</div>
         </div>
-        <ul class="guideline-list">
-          <li><span class="gl-bullet">⏱️</span><span><strong>The "Lead Time" Countdown:</strong> a signal doesn't mean strong winds are happening right now — it means winds of that speed are expected to arrive within the lead time shown, giving communities a window to prepare.</span></li>
-          <li><span class="gl-bullet">🌬️🌧️</span><span><strong>Wind vs. Rain Is Independent:</strong> a slow-moving Tropical Depression might only trigger Signal No. 1 for winds, but it could simultaneously dump massive amounts of continuous water, triggering a Red Heavy Rainfall Warning. Always track both indicators during a storm.</span></li>
-        </ul>
-        <div class="tcws-table-wrap">
-          <table class="tcws-table">
-            <thead>
-              <tr>
-                <th>Wind Signal</th>
-                <th>Wind Speeds (km/h)</th>
-                <th>Warning Lead Time</th>
-                <th>Typical Storm Category</th>
-                <th>Potential Structural Impact</th>
-              </tr>
-            </thead>
-            <tbody>${tcwsRowsHtml}</tbody>
-          </table>
-        </div>
-        <div class="guidelines-footnote">Reference table based on DOST-PAGASA's published Tropical Cyclone Wind Signal definitions — always confirm the currently active signal directly via PAGASA's official bulletins.</div>
       </section>`;
     }
 
@@ -2074,6 +2110,10 @@
     const rain24 = advisory.accum24h;
     const rain24Val = rain24 != null ? rain24.toFixed(1) + " mm" : "—";
     const rain24Sub = rain24 == null ? "No data" : rain24 >= 65 ? "Heavy accumulation" : rain24 >= 30 ? "Moderate accumulation" : rain24 > 0 ? "Light accumulation" : "No rain";
+    const gustVal = advisory.gustKmh ? Math.round(advisory.gustKmh) + " km/h" : "—";
+    const gustSub = advisory.gustExceedsSustained ? "Above sustained wind level" : (advisory.gustKmh > curWindSpeed*3.6 + 5 ? "Above sustained speed" : "Close to sustained speed");
+    const popVal = advisory.futureAvgPop != null ? Math.round(advisory.futureAvgPop) + "%" : "—";
+    const popSub = advisory.futureAvgPop == null ? "No data" : "Next " + (advisory.windowHours||5) + " hrs";
 
     function detailCard(iconBg, iconSvg, label, val, sub){
       return `<div class="detail-card glass-light">
@@ -2095,6 +2135,8 @@
       detailCard("rgba(20,184,166,0.2)", SM.compass.replace('stroke="currentColor"','stroke="#5eead4"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Dew Point", dew+"°C", dewSub),
       detailCard("rgba(59,130,246,0.2)", SM.umbrella.replace('stroke="currentColor"','stroke="#93c5fd"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Rain (1h)", rain1h, rainSub),
       detailCard("rgba(37,99,235,0.22)", SM.umbrella.replace('stroke="currentColor"','stroke="#60a5fa"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Rain (24h accum.)", rain24Val, rain24Sub),
+      detailCard("rgba(6,182,212,0.22)", SM.wind.replace('stroke="currentColor"','stroke="#22d3ee"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Wind Gusts", gustVal, gustSub),
+      detailCard("rgba(96,165,250,0.22)", SM.droplets.replace('stroke="currentColor"','stroke="#93c5fd"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Rain Probability", popVal, popSub),
     ].join("");
     html += `<section class="glass details-card">
       <div class="card-title">${SM.gauge.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Detailed Weather Metrics</div>
