@@ -202,6 +202,22 @@
   .detail-val{font-size:1.15rem;font-weight:800;margin-bottom:0.2rem}
   .detail-sub{font-size:0.7rem;color:rgba(255,255,255,0.5)}
 
+  .guidelines-card{padding:1.25rem;margin-bottom:1.5rem}
+  .guidelines-intro{font-size:0.9rem;line-height:1.65;color:rgba(255,255,255,0.85);margin-bottom:1rem}
+  .guidelines-intro strong{color:#fff}
+  .guideline-list{list-style:none;display:flex;flex-direction:column;gap:0.65rem;margin-bottom:1.25rem}
+  .guideline-list li{display:flex;gap:0.65rem;align-items:flex-start;font-size:0.85rem;line-height:1.55;color:rgba(255,255,255,0.85);padding:0.75rem 0.9rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:0.65rem}
+  .guideline-list .gl-bullet{flex-shrink:0;font-size:1rem;line-height:1}
+  .guideline-list strong{color:#fde68a}
+  .tcws-table-wrap{overflow-x:auto;border-radius:0.75rem;border:1px solid rgba(255,255,255,0.12)}
+  table.tcws-table{width:100%;border-collapse:collapse;font-size:0.82rem;min-width:640px}
+  table.tcws-table thead th{text-align:left;padding:0.7rem 0.85rem;background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.65);font-size:0.7rem;letter-spacing:0.05em;text-transform:uppercase;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.12)}
+  table.tcws-table tbody td{padding:0.85rem;vertical-align:top;border-bottom:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.85);line-height:1.5}
+  table.tcws-table tbody tr:last-child td{border-bottom:none}
+  table.tcws-table tbody tr:hover{background:rgba(255,255,255,0.04)}
+  .tcws-signal-cell{font-weight:800;white-space:nowrap}
+  .tcws-impact-cell strong{color:#fff}
+  .guidelines-footnote{margin-top:1rem;font-size:0.72rem;color:rgba(255,255,255,0.45);line-height:1.5}
   .refresh-meta{display:flex;align-items:center;justify-content:center;gap:0.5rem;padding:1rem;color:rgba(255,255,255,0.5);font-size:0.75rem}
   .refresh-meta svg{width:0.85rem;height:0.85rem}
 
@@ -1922,6 +1938,54 @@
           ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
         </a>
       </div>
+    </section>`;
+
+    // TCWS (Tropical Cyclone Wind Signal) explainer — a static reference
+    // card, deliberately separate from the Rainfall Warning info above.
+    // Wind signals and rainfall warnings are independent PAGASA systems
+    // (see guidelines-intro copy below), so they are kept in their own
+    // sections rather than merged into one table.
+    const TCWS_ROWS = [
+      { signal:"Signal No. 1", speed:"39 to 61 km/h",   lead:"36 hours before onset", category:"Tropical Depression",  impact:"<strong>Minimal to minor.</strong> Makeshift houses may suffer slight damage; twigs on trees might snap." },
+      { signal:"Signal No. 2", speed:"62 to 88 km/h",   lead:"24 hours before onset", category:"Tropical Storm",        impact:"<strong>Minor to moderate.</strong> Light materials can be unroofed. Some old wooden billboards may collapse." },
+      { signal:"Signal No. 3", speed:"89 to 117 km/h",  lead:"18 hours before onset", category:"Severe Tropical Storm", impact:"<strong>Moderate to heavy.</strong> Significant damage to houses made of light materials; many banana plants are downed." },
+      { signal:"Signal No. 4", speed:"118 to 184 km/h", lead:"12 hours before onset", category:"Typhoon",               impact:"<strong>Severe to extensive.</strong> Severe damage to light structures; large trees are uprooted. Power outages are widespread." },
+      { signal:"Signal No. 5", speed:"185 km/h or higher", lead:"12 hours before onset", category:"Super Typhoon",     impact:"<strong>Catastrophic.</strong> Total devastation of light structures. Almost all traditional utility poles are collapsed or snapped." },
+    ];
+    const tcwsRowsHtml = TCWS_ROWS.map(r => `<tr>
+        <td class="tcws-signal-cell">${r.signal}</td>
+        <td>${r.speed}</td>
+        <td>${r.lead}</td>
+        <td>${r.category}</td>
+        <td class="tcws-impact-cell">${r.impact}</td>
+      </tr>`).join("");
+    html += `<section id="guidelines" class="glass guidelines-card">
+      <div class="card-title">${SM.wind.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Tropical Cyclone Wind Signal (TCWS)</div>
+      <div class="guidelines-intro">
+        DOST-PAGASA uses the Tropical Cyclone Wind Signal (TCWS) system, which scales from Signal No. 1 to Signal No. 5.
+        Unlike the heavy rainfall warning system above — which focuses entirely on <strong>localized rain volume</strong> —
+        the wind signal measures <strong>maximum sustained wind speeds</strong> expected in a specific area within a
+        given timeframe (lead time) as a tropical cyclone approaches.
+      </div>
+      <ul class="guideline-list">
+        <li><span class="gl-bullet">⏱️</span><span><strong>The "Lead Time" Countdown:</strong> if an area is placed under Signal No. 1, it doesn't mean strong winds are happening right now. It means winds of that speed are expected to arrive within 36 hours, giving communities a clear window to prepare.</span></li>
+        <li><span class="gl-bullet">🌬️🌧️</span><span><strong>Wind vs. Rain Is Independent:</strong> a slow-moving Tropical Depression might only trigger Signal No. 1 for winds, but it could simultaneously dump massive amounts of continuous water, triggering a Red Heavy Rainfall Alert. Always track both indicators during a storm.</span></li>
+      </ul>
+      <div class="tcws-table-wrap">
+        <table class="tcws-table">
+          <thead>
+            <tr>
+              <th>Wind Signal</th>
+              <th>Wind Speeds (km/h)</th>
+              <th>Warning Lead Time</th>
+              <th>Typical Storm Category</th>
+              <th>Potential Structural Impact</th>
+            </tr>
+          </thead>
+          <tbody>${tcwsRowsHtml}</tbody>
+        </table>
+      </div>
+      <div class="guidelines-footnote">Reference table based on DOST-PAGASA's published Tropical Cyclone Wind Signal definitions. This is educational reference material, kept separate from the live Heavy Rainfall Warning info elsewhere on this page — always confirm current signals directly via PAGASA's official bulletins.</div>
     </section>`;
 
     // Detailed metrics
