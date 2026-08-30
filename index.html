@@ -761,6 +761,8 @@
     titleFlashOn: false,
     usingMock: false,
     lastNotifiedSignature: null,
+    pagasaLive: null,
+    pagasaArg: null,
   };
 
   // Flash the browser tab title when a warning is active, so staff monitoring
@@ -1802,6 +1804,135 @@
   }
 
 
+  // ========== Live PAGASA NCR Regional Forecast parser ==========
+  // Bataan (and Balanga specifically) falls under PAGASA's NCR PRSD
+  // regional forecast page, NOT the Northern Luzon one — confirmed by
+  // reading each region's own province list on bagong.pagasa.dost.gov.ph.
+  // That page publishes live Heavy Rainfall Warning bulletins as plain
+  // server-rendered HTML (not an API), and it names municipalities
+  // (including "Balanga") directly under RED/ORANGE/YELLOW headings. This
+  // parses that HTML client-side and feeds the result into the same
+  // PAGASA Priority Rule used for the manual advisory note.
+  const PAGASA_NCR_URL = "https://bagong.pagasa.dost.gov.ph/regional-forecast/ncrprsd";
+  const NCR_LEVELS = [
+    { key:"red",    heading:"RED WARNING LEVEL" },
+    { key:"orange", heading:"ORANGE WARNING LEVEL" },
+    { key:"yellow", heading:"YELLOW WARNING LEVEL" },
+  ];
+
+  function parseNcrPrsdHtml(html){
+    // Strip tags to get plain text, the same way a person reading the page
+    // would see it — far more robust than trying to match specific HTML
+    // structure that PAGASA could restyle at any time.
+    let text;
+    try{
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      text = doc.body ? doc.body.textContent : html.replace(/<[^>]+>/g, " ");
+    }catch(e){
+      text = html.replace(/<[^>]+>/g, " ");
+    }
+    text = text.replace(/\s+/g, " ").trim();
+
+    if(/there is no Heavy Rainfall Warning Issued/i.test(text.slice(0, text.indexOf("Heavy Rainfall Warning No") > -1 ? text.indexOf("Heavy Rainfall Warning No") : 500))){
+      return { level:"", ok:true, active:false, note:"No active PAGASA Heavy Rainfall Warning for NCR/Bataan region.", bulletinNo:"", issuedAt:"" };
+    }
+
+    const startIdx = text.search(/Heavy Rainfall Warning No\.?\s*\d+/i);
+    if(startIdx < 0){
+      return { level:"", ok:true, active:false, note:"No active PAGASA Heavy Rainfall Warning found on the NCR PRSD page.", bulletinNo:"", issuedAt:"" };
+    }
+    // Grab just the first (latest) bulletin — stop at the next one, or at
+    // a reasonable max length, whichever comes first.
+    const rest = text.slice(startIdx);
+    const nextIdx = rest.slice(20).search(/Heavy Rainfall Warning No\.?\s*\d+/i);
+    const block = nextIdx > -1 ? rest.slice(0, nextIdx + 20) : rest.slice(0, 4000);
+
+    const bulletinNoMatch = block.match(/Heavy Rainfall Warning No\.?\s*(\d+)/i);
+    const issuedMatch = block.match(/Issued at:?\s*([^.]+?)(?=RED WARNING|ORANGE WARNING|YELLOW WARNING|Meanwhile|$)/i);
+
+    let foundLevel = "";
+    let matchedMunicipality = "";
+    for(const lv of NCR_LEVELS){
+      const re = new RegExp(lv.heading + "\\s*:?\\s*([\\s\\S]*?)(?=ASSOCIATED HAZARD|RED WARNING LEVEL|ORANGE WARNING LEVEL|YELLOW WARNING LEVEL|Meanwhile|$)", "i");
+      const m = block.match(re);
+      if(!m) continue;
+      const levelText = m[1];
+      // Look specifically inside the Bataan(...) group so we don't get a
+      // false match from some other "Balanga" elsewhere in the country.
+      const bataanMatch = levelText.match(/Bataan\s*\(([^)]*)\)/i);
+      if(bataanMatch && /Balanga/i.test(bataanMatch[1])){
+        foundLevel = lv.key;
+        matchedMunicipality = "Balanga";
+        break;
+      }
+      // Whole-province mention with no parenthetical breakdown means every
+      // municipality (including Balanga) is covered at that level.
+      if(!bataanMatch && /\bBataan\b(?!\s*\()/i.test(levelText)){
+        foundLevel = lv.key;
+        matchedMunicipality = "Bataan (whole province)";
+        break;
+      }
+    }
+
+    return {
+      level: foundLevel,
+      ok: true,
+      active: !!foundLevel,
+      note: foundLevel
+        ? `PAGASA Heavy Rainfall Warning No. ${bulletinNoMatch ? bulletinNoMatch[1] : "?"} (NCR PRSD): ${matchedMunicipality} listed under ${foundLevel.toUpperCase()} WARNING LEVEL.`
+        : "Latest PAGASA Heavy Rainfall Warning bulletin doesn't list Balanga/Bataan under any color level.",
+      bulletinNo: bulletinNoMatch ? bulletinNoMatch[1] : "",
+      issuedAt: issuedMatch ? issuedMatch[1].trim() : "",
+    };
+  }
+
+  async function fetchPagasaNcrForecast(){
+    try{
+      const res = await fetch(PAGASA_NCR_URL, { cache: "no-store" });
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const html = await res.text();
+      const parsed = parseNcrPrsdHtml(html);
+      state.pagasaLive = { ...parsed, fetchedAt: Date.now(), url: PAGASA_NCR_URL, corsBlocked:false };
+    }catch(err){
+      // Most likely CORS — PAGASA's site isn't guaranteed to allow
+      // cross-origin browser fetches from arbitrary sites. Fail soft: the
+      // manual PAGASA Advisory note (already in Settings) remains available
+      // as the fallback path, and we say so plainly rather than pretending
+      // this succeeded.
+      state.pagasaLive = { ok:false, active:false, level:"", note:"", corsBlocked:true, fetchedAt: Date.now(), url: PAGASA_NCR_URL };
+    }
+  }
+
+  const PAGASA_ARG_URL = "https://bagong.pagasa.dost.gov.ph/automated-rain-gauge";
+  // Nearest ARG station to Balanga in PAGASA's public table is "Hermosa,
+  // Bataan AWS" — still ~30km away and, going by a spot-check, often
+  // hours-to-days stale, so this is shown as supplementary context only,
+  // never used to drive the warning level the way the NCR PRSD bulletin is.
+  const ARG_STATION_MATCH = /Hermosa,?\s*Bataan/i;
+
+  async function fetchPagasaArg(){
+    try{
+      const res = await fetch(PAGASA_ARG_URL, { cache: "no-store" });
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const rows = Array.from(doc.querySelectorAll("table tr"));
+      let found = null;
+      for(const row of rows){
+        const cells = Array.from(row.querySelectorAll("td")).map(td => td.textContent.trim());
+        if(cells.length >= 5 && ARG_STATION_MATCH.test(cells[1] || "")){
+          found = { siteName: cells[1], hourlyRain: cells[2], elevation: cells[3], lastUpdated: cells[4] };
+          break;
+        }
+      }
+      state.pagasaArg = found
+        ? { ok:true, ...found, url: PAGASA_ARG_URL, fetchedAt: Date.now() }
+        : { ok:true, notFound:true, url: PAGASA_ARG_URL, fetchedAt: Date.now() };
+    }catch(err){
+      state.pagasaArg = { ok:false, corsBlocked:true, url: PAGASA_ARG_URL, fetchedAt: Date.now() };
+    }
+  }
+
   async function fetchAllWeather(){
     state.loading = true;
     state.error = null;
@@ -1838,6 +1969,12 @@
       state.data = adaptOpenMeteo(om, cityCfg || DEFAULT_CITY, (countryCfg || DEFAULT_COUNTRY).toUpperCase());
       state.usingMock = false;
       state.lastFetch = Date.now();
+
+      // Best-effort, non-blocking: don't let a slow/blocked PAGASA fetch
+      // delay or break the main weather dashboard. Runs in parallel with
+      // rendering; renderDashboard() re-runs on completion to pick it up.
+      fetchPagasaNcrForecast().then(() => renderState());
+      fetchPagasaArg().then(() => renderState());
     }catch(err){
       console.error(err);
       // Resilient fallback: a safety dashboard should stay usable (and the
@@ -1994,17 +2131,41 @@
     // Class Suspension Advisory — DepEd Order No. 14, s. 2026 (4H Learning Continuity Framework)
     const advisory = computeSuspensionAdvisory(cur, safe(d, "continuous", null));
 
-    // PAGASA Priority Rule: an official PAGASA-declared level (entered by
-    // staff, or synced from the Google Sheet) always takes priority over
-    // the automated live-data estimate — but specifically by ESCALATING,
-    // never silently downgrading. If PAGASA declared Orange and the live
-    // estimate only reads Yellow, show Orange. If live conditions already
-    // exceed what PAGASA stated (e.g. an outdated note), the higher one
-    // still wins — a real, currently-worsening situation should never be
-    // hidden behind a stale official note.
+    // PAGASA Priority Rule: an official PAGASA-declared level always takes
+    // priority over the automated live-data estimate — but specifically by
+    // ESCALATING, never silently downgrading. If PAGASA declared Orange and
+    // the live estimate only reads Yellow, show Orange. If live conditions
+    // already exceed what PAGASA stated, the higher one still wins — a
+    // real, currently-worsening situation should never be hidden behind a
+    // stale official note.
+    //
+    // Two independent PAGASA-sourced inputs feed this, and we take
+    // whichever is higher:
+    //  1. state.pagasaAdvisory — the manual note staff enter in Settings
+    //     (or sync from the Google Sheet).
+    //  2. state.pagasaLive — auto-parsed from PAGASA's own NCR PRSD Heavy
+    //     Rainfall Warning bulletin (bagong.pagasa.dost.gov.ph), which
+    //     names Balanga/Bataan municipalities directly under each color.
+    //     This can fail silently (most likely CORS, since PAGASA's site
+    //     isn't guaranteed to allow cross-origin browser fetches) — when it
+    //     does, this input is simply absent and the manual note remains
+    //     the fallback path.
     advisory.autoLevel = advisory.level;
     advisory.pagasaOverride = false;
-    const pagasaDeclared = (state.pagasaAdvisory && state.pagasaAdvisory.active && state.pagasaAdvisory.level) ? state.pagasaAdvisory.level : null;
+    advisory.pagasaOverrideSource = null; // "manual" | "live" | "both"
+    const manualLevel = (state.pagasaAdvisory && state.pagasaAdvisory.active && state.pagasaAdvisory.level) ? state.pagasaAdvisory.level : null;
+    const liveLevel = (state.pagasaLive && state.pagasaLive.ok && state.pagasaLive.active && state.pagasaLive.level) ? state.pagasaLive.level : null;
+    let pagasaDeclared = null;
+    if(manualLevel && liveLevel){
+      pagasaDeclared = LEVEL_RANK[liveLevel] >= LEVEL_RANK[manualLevel] ? liveLevel : manualLevel;
+      advisory.pagasaOverrideSource = "both";
+    }else if(liveLevel){
+      pagasaDeclared = liveLevel;
+      advisory.pagasaOverrideSource = "live";
+    }else if(manualLevel){
+      pagasaDeclared = manualLevel;
+      advisory.pagasaOverrideSource = "manual";
+    }
     if(pagasaDeclared && LEVEL_RANK[pagasaDeclared] > LEVEL_RANK[advisory.level]){
       advisory.level = pagasaDeclared;
       advisory.pagasaOverride = true;
@@ -2080,9 +2241,9 @@
       html += `<section class="advisory-banner advisory-${advisory.level}" style="--adv-color:${am.color};--adv-bg:${am.bg};--adv-border:${am.border}">
         <div class="advisory-icon">${SM.alertTri.replace('stroke="currentColor"','stroke="'+am.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px"')}</div>
         <div class="advisory-body">
-          <div class="advisory-title">${am.label}${advisory.pagasaOverride ? ` <span style="font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:999px;background:rgba(255,255,255,0.15);vertical-align:middle">📋 OFFICIAL PAGASA</span>` : ""}</div>
+          <div class="advisory-title">${am.label}${advisory.pagasaOverride ? ` <span style="font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:999px;background:rgba(255,255,255,0.15);vertical-align:middle">📋 OFFICIAL PAGASA${advisory.pagasaOverrideSource === "live" || advisory.pagasaOverrideSource === "both" ? " (LIVE)" : ""}</span>` : ""}</div>
           <div class="advisory-reasons">${advisory.reasons.length ? advisory.reasons.join(" &nbsp;•&nbsp; ") : "No automated wind/rain triggers currently — level set by official PAGASA advisory."}</div>
-          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}${advisory.pagasaOverride ? `<br><br>📋 <strong>Escalated to match PAGASA's officially declared level</strong> — the automated live-data estimate alone currently reads ${H_LEVEL[advisory.autoLevel].short} (${H_LEVEL[advisory.autoLevel].label}), but per PAGASA's own priority rule, an official declaration always takes precedence and can only raise the shown level, never lower it below live conditions. See the PAGASA Advisory note below for details/source.` : ""}<br><br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.${ndrrmcLikely ? `<br><br>📱 <strong>You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level</strong> — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins. If your phone buzzes with a loud alert tone, this is why.` : ""}</div>
+          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}${advisory.pagasaOverride ? `<br><br>📋 <strong>Escalated to match PAGASA's officially declared level</strong> (source: ${advisory.pagasaOverrideSource === "live" ? "live-parsed NCR PRSD bulletin" : advisory.pagasaOverrideSource === "manual" ? "staff-entered note" : "live bulletin + staff note"}) — the automated live-data estimate alone currently reads ${H_LEVEL[advisory.autoLevel].short} (${H_LEVEL[advisory.autoLevel].label}), but per PAGASA's own priority rule, an official declaration always takes precedence and can only raise the shown level, never lower it below live conditions. See the PAGASA Advisory section below for details/source.` : ""}<br><br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.${ndrrmcLikely ? `<br><br>📱 <strong>You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level</strong> — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins. If your phone buzzes with a loud alert tone, this is why.` : ""}</div>
         </div>
       </section>`;
     }
@@ -2116,6 +2277,32 @@
           <div class="advisory-sub">Sustained wind is still below ${WIND_SIGNALS.find(w=>w.signal===1).label} (39 km/h), but gusts are already reaching ${gw.label}-equivalent speeds (${gw.range}). Loose debris, umbrellas, and small branches can move at gust speeds even when the sustained wind feels calmer. This is a local estimate from live wind data, not an official PAGASA declaration.</div>
         </div>
       </section>`;
+    }
+
+    // Live PAGASA NCR PRSD feed status — shows what the automated parser
+    // found (or why it couldn't reach PAGASA's site, most likely CORS,
+    // since bagong.pagasa.dost.gov.ph isn't guaranteed to allow
+    // cross-origin browser fetches from other domains).
+    if(state.pagasaLive){
+      const pl = state.pagasaLive;
+      if(pl.ok && pl.active && pl.level){
+        const plMeta = advisoryMeta(pl.level);
+        html += `<section class="advisory-banner advisory-${pl.level}" style="--adv-color:${plMeta.color};--adv-bg:${plMeta.bg};--adv-border:${plMeta.border}">
+          <div class="advisory-icon">${SM.info.replace('stroke="currentColor"','stroke="'+plMeta.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:22px;height:22px"')}</div>
+          <div class="advisory-body">
+            <div class="advisory-title">📡 LIVE PAGASA FEED — ${H_LEVEL[pl.level].short}${pl.bulletinNo ? ` (Bulletin No. ${pl.bulletinNo})` : ""}</div>
+            <div class="advisory-sub" style="font-size:0.88rem;color:#fff;font-weight:600">${str(pl.note).replace(/</g,"&lt;")}</div>
+            <div class="advisory-sub" style="margin-top:0.5rem">
+              ${pl.issuedAt ? `Issued ${str(pl.issuedAt)} &nbsp;•&nbsp; ` : ""}<a href="${pl.url}" target="_blank" rel="noopener" style="color:#fde68a;font-weight:700">View full NCR PRSD bulletin →</a>
+            </div>
+            <div class="advisory-sub" style="margin-top:0.4rem;opacity:0.85">Auto-parsed directly from PAGASA's NCR Regional Forecast page (covers Bataan) every refresh — this is the source driving the "OFFICIAL PAGASA (LIVE)" tag above when active.</div>
+          </div>
+        </section>`;
+      }else if(pl.ok && !pl.active){
+        html += `<div class="alerts-source-hint" style="margin-bottom:1.5rem">📡 Live PAGASA feed checked — no active Heavy Rainfall Warning currently lists Balanga/Bataan. <a href="${pl.url}" target="_blank" rel="noopener">View the NCR PRSD page →</a></div>`;
+      }else if(pl.corsBlocked){
+        html += `<div class="alerts-source-hint" style="margin-bottom:1.5rem">📡 Couldn't auto-fetch PAGASA's live bulletin directly from your browser (likely blocked by PAGASA's site, not this dashboard). Use the manual "PAGASA Advisory" note in Settings instead, or <a href="${PAGASA_NCR_URL}" target="_blank" rel="noopener">check the NCR PRSD page yourself →</a></div>`;
+      }
     }
 
     // Manually-curated note pointing to a live PAGASA advisory post (e.g.
@@ -2507,6 +2694,12 @@
     html += `<section class="glass details-card">
       <div class="card-title">${SM.gauge.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Detailed Weather Metrics</div>
       <div class="details-grid">${details}</div>
+      ${(() => {
+        const pa = state.pagasaArg;
+        if(!pa || !pa.ok) return "";
+        if(pa.notFound) return "";
+        return `<div class="alerts-source-hint" style="margin:1rem 0 0">📡 Nearest PAGASA Automated Rain Gauge — <strong>${str(pa.siteName)}</strong>: ${str(pa.hourlyRain) || "—"} mm/hr, last updated ${str(pa.lastUpdated) || "unknown"}. This station is ~30km from Balanga and can go stale for long stretches, so it's shown for cross-reference only — it does not drive the warning level above. <a href="${pa.url}" target="_blank" rel="noopener">View full ARG table →</a></div>`;
+      })()}
     </section>`;
 
     // Refresh meta
