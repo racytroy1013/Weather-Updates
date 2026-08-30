@@ -185,6 +185,12 @@
   .notif-btn.notif-on{background:rgba(34,197,94,0.22);border-color:rgba(34,197,94,0.4);color:#bbf7d0}
   .alerts-source-hint{font-size:0.78rem;line-height:1.5;color:rgba(255,255,255,0.65);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:0.65rem;padding:0.65rem 0.8rem;margin-bottom:1rem}
   .alerts-source-hint a{color:#93c5fd;font-weight:600}
+  .ndrrmc-map{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:0.65rem;padding:0.75rem 0.85rem;margin-bottom:1rem}
+  .ndrrmc-map-title{font-size:0.78rem;font-weight:700;color:rgba(255,255,255,0.85);margin-bottom:0.55rem}
+  .ndrrmc-map-row{display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:rgba(255,255,255,0.75);line-height:1.5;margin-bottom:0.3rem}
+  .ndrrmc-map-row strong{color:#fff}
+  .ndrrmc-dot{flex-shrink:0;width:0.55rem;height:0.55rem;border-radius:50%}
+  .ndrrmc-map-note{font-size:0.7rem;color:rgba(255,255,255,0.45);line-height:1.5;margin-top:0.5rem}
   .alerts-empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:2rem 1rem}
   .alerts-empty-icon{width:4rem;height:4rem;border-radius:999px;background:rgba(52,211,153,0.2);display:flex;align-items:center;justify-content:center;margin-bottom:1rem}
   .alerts-empty-icon svg{width:2rem;height:2rem;color:#6ee7b7}
@@ -666,6 +672,7 @@
   const REFRESH_MS = 5 * 60 * 1000;
   const API_BASE = "https://api.open-meteo.com/v1/forecast";
   const GEOCODE_BASE = "https://geocoding-api.open-meteo.com/v1/search";
+  const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
   const BASE_TITLE = document.title;
 
   // ====== SHARED LIVE NOTICES (Google Form -> Google Sheet -> CSV) ======
@@ -692,6 +699,7 @@
     announcement: loadAnnouncement(),
     pagasaAdvisory: loadPagasaAdvisory(),
     data: null,
+    tide: null,
     loading: false,
     error: null,
     lastFetch: 0,
@@ -975,6 +983,7 @@
     phone: smallSvg('<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.33 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>', "currentColor"),
     facebook: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>',
     globe: smallSvg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', "currentColor"),
+    waves: smallSvg('<path d="M2 6c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/><path d="M2 12c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/><path d="M2 18c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/>', "currentColor"),
   };
 
   // ========== Background gradient based on weather ==========
@@ -1273,9 +1282,12 @@
     if(dismissed === sig){ popupRoot.innerHTML = ""; return; }
 
     const link = alertsPageLink();
+    const ndrrmcLikely = (advisory.level === "orange" || advisory.level === "red");
+    const ndrrmcNote = ndrrmcLikely ? "📱 You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins." : "";
     const shareText = am.label + "\n\n"
       + advisory.reasons.join("\n") + "\n\n"
       + learningModeText + "\n\n"
+      + (ndrrmcLikely ? ndrrmcNote + "\n\n" : "")
       + "This is a local estimate from live weather data — not an official PAGASA/DepEd/LGU announcement. Please confirm with official channels.\n\n"
       + "Live dashboard: " + link + "\n"
       + "Official PAGASA page: " + PAGASA_FB_URL;
@@ -1286,7 +1298,7 @@
         <div class="wpop-eyebrow">Weather Advisory</div>
         <div class="wpop-title">${am.label}</div>
         <div class="wpop-reasons">${advisory.reasons.join("<br>")}</div>
-        <div class="wpop-sub">${learningModeText}<br><br>This is a local estimate from live weather data — not an official PAGASA/DepEd/LGU announcement. Please confirm with official channels before acting.<br><br><a href="#alerts" id="wpopAlertsLink" style="color:${am.color};font-weight:700">View live Weather Alerts ↓</a> &nbsp;•&nbsp; <a href="${PAGASA_FB_URL}" target="_blank" rel="noopener" style="color:${am.color};font-weight:700">Official PAGASA Page ↗</a></div>
+        <div class="wpop-sub">${learningModeText}${ndrrmcLikely ? `<br><br><strong>${ndrrmcNote}</strong>` : ""}<br><br>This is a local estimate from live weather data — not an official PAGASA/DepEd/LGU announcement. Please confirm with official channels before acting.<br><br><a href="#alerts" id="wpopAlertsLink" style="color:${am.color};font-weight:700">View live Weather Alerts ↓</a> &nbsp;•&nbsp; <a href="${PAGASA_FB_URL}" target="_blank" rel="noopener" style="color:${am.color};font-weight:700">Official PAGASA Page ↗</a></div>
         <div class="wpop-actions">
           <button class="wpop-btn wpop-btn-primary" id="wpopShareBtn">📣 Share This Alert</button>
           <button class="wpop-btn wpop-btn-secondary" id="wpopCloseBtn">Dismiss</button>
@@ -1731,6 +1743,93 @@
   }
 
 
+  // ========== Tide & Coastal Flood Risk ==========
+  // Balanga City sits right on Manila Bay, so an incoming high tide can slow
+  // drainage during heavy rain and raise flood risk in low-lying/coastal
+  // barangays. Open-Meteo's free Marine API (same provider as the main
+  // forecast above, no key needed) exposes modeled sea-level height
+  // (sea_level_height_msl, tidal signal included) as an hourly series. We
+  // derive high/low tide times ourselves by finding local peaks/troughs in
+  // that series — there's no separate "tide table" endpoint.
+  //
+  // Caveats (shown to the user in the card itself too):
+  //  - The underlying model is ~8km resolution and isn't tuned for complex,
+  //    semi-enclosed coastlines like Manila Bay, so treat this as a general
+  //    planning/awareness signal, not a precise navigational tide table.
+  //  - Heights are relative to mean sea level, not the "chart datum" (e.g.
+  //    Mean Lower Low Water) that official tide tables use, so raw numbers
+  //    won't exactly match sites like tide-forecast.com — the *timing* of
+  //    highs/lows is the useful part here.
+  async function fetchTideData(lat, lon){
+    try{
+      const params = new URLSearchParams({
+        latitude: lat,
+        longitude: lon,
+        hourly: "sea_level_height_msl",
+        timezone: "Asia/Manila",
+        past_hours: "6",
+        forecast_days: "3",
+      });
+      const res = await fetch(MARINE_API_BASE + "?" + params.toString());
+      if(!res.ok) throw new Error("Tide fetch error: HTTP " + res.status);
+      const om = await res.json();
+      const times = safe(om, "hourly.time", []);
+      const heights = safe(om, "hourly.sea_level_height_msl", []);
+      if(!Array.isArray(times) || !Array.isArray(heights) || times.length < 3){
+        throw new Error("Tide data unavailable for this location");
+      }
+      const ts = times.map(t => Math.floor(new Date(t).getTime()/1000));
+
+      // Local peaks = high tide, local troughs = low tide.
+      const points = [];
+      for(let i=1;i<heights.length-1;i++){
+        const prev = heights[i-1], cur = heights[i], next = heights[i+1];
+        if(prev==null || cur==null || next==null) continue;
+        if(cur > prev && cur >= next) points.push({ t: ts[i], height: cur, type: "high" });
+        else if(cur < prev && cur <= next) points.push({ t: ts[i], height: cur, type: "low" });
+      }
+
+      const nowSec = Math.floor(Date.now()/1000);
+
+      // Current level + short-term trend, from the samples bracketing "now".
+      let curIdx = 0;
+      for(let i=0;i<ts.length;i++){ if(ts[i] <= nowSec) curIdx = i; }
+      const curHeight = heights[curIdx];
+      const prevHeight = heights[Math.max(0, curIdx-1)];
+      const trend = curHeight > prevHeight ? "rising" : curHeight < prevHeight ? "falling" : "steady";
+
+      const upcoming = points.filter(p => p.t >= nowSec - 900).sort((a,b) => a.t - b.t);
+      const nextHigh = upcoming.find(p => p.type === "high") || null;
+      const nextLow  = upcoming.find(p => p.type === "low") || null;
+
+      const todayLabel = new Date(nowSec*1000).toDateString();
+      const today = points.filter(p => new Date(p.t*1000).toDateString() === todayLabel);
+
+      return { available:true, curHeight, trend, nextHigh, nextLow, today, generatedAt: Date.now() };
+    }catch(err){
+      console.warn("Tide data unavailable:", err);
+      return { available:false, error: String((err && err.message) || err) };
+    }
+  }
+
+  // Cross-references the tide outlook with the live rainfall advisory level
+  // (computed by computeSuspensionAdvisory) so the card can call out when the
+  // two combine into a higher flood risk, instead of showing them as two
+  // unrelated numbers.
+  function tideRiskNote(advisory, tide){
+    if(!tide || !tide.available) return null;
+    const heavyRain = advisory.level === "orange" || advisory.level === "red";
+    const warnWord = advisory.level === "red" ? "RED" : "ORANGE";
+    const hoursToHigh = tide.nextHigh ? (tide.nextHigh.t - Math.floor(Date.now()/1000)) / 3600 : null;
+    if(heavyRain && hoursToHigh != null && hoursToHigh <= 4){
+      return { tone:"red", text: `⚠️ Elevated flood risk: the ${warnWord} rainfall warning is active while the next high tide approaches (${formatTime(tide.nextHigh.t)}). Drainage into Manila Bay will be slower during this window — low-lying and coastal barangays should watch water levels closely.` };
+    }
+    if(heavyRain){
+      return { tone:"orange", text: `A ${warnWord} rainfall warning is active. Tide isn't at its peak right now, but any downpour timed near the next high tide (${tide.nextHigh ? formatTime(tide.nextHigh.t) : "—"}) will drain more slowly than usual.` };
+    }
+    return { tone:"calm", text: `No active heavy-rainfall warning right now, so tide alone isn't a flood concern. Recheck this if rain conditions worsen.` };
+  }
+
   async function fetchAllWeather(){
     state.loading = true;
     state.error = null;
@@ -1740,6 +1839,11 @@
       const cityCfg = (state.config.city || DEFAULT_CITY).trim();
       const countryCfg = (state.config.country || DEFAULT_COUNTRY).trim();
       const { lat, lon } = await resolveCoords(cityCfg, countryCfg);
+
+      // Kicked off in parallel with the main weather request below. It never
+      // throws (see fetchTideData) so it can't trigger the mock-data
+      // fallback in the catch block just because the marine API hiccups.
+      const tidePromise = fetchTideData(lat, lon);
 
       const params = new URLSearchParams({
         latitude: lat,
@@ -1767,6 +1871,7 @@
       state.data = adaptOpenMeteo(om, cityCfg || DEFAULT_CITY, (countryCfg || DEFAULT_COUNTRY).toUpperCase());
       state.usingMock = false;
       state.lastFetch = Date.now();
+      state.tide = await tidePromise;
     }catch(err){
       console.error(err);
       // Resilient fallback: a safety dashboard should stay usable (and the
@@ -1775,6 +1880,7 @@
       state.data = generateMockData();
       state.usingMock = true;
       state.lastFetch = Date.now();
+      state.tide = state.tide || { available:false };
     }finally{
       state.loading = false;
       renderState();
@@ -1878,6 +1984,14 @@
         </div>
       </section>`;
     }else{
+      // NDRRMC/NTC's cell-broadcast "Emergency Alert" (the loud alarm-tone
+      // message that shows up directly on phones, RA 10639) is triggered
+      // specifically for PAGASA's Orange and Red rainfall warnings, and for
+      // significant tropical cyclone bulletins — which is exactly what
+      // pushes our own combined level to orange/red (Hinga/Hinto). So this
+      // is a genuine correlation, not a guess: if this banner is
+      // orange/red, a phone alert is plausible/likely too.
+      const ndrrmcLikely = (advisory.level === "orange" || advisory.level === "red");
       let scopeText;
       if(advisory.level === "yellow"){
         const scopes = [advisory.windScope, advisory.rainScope].filter(Boolean);
@@ -1892,7 +2006,7 @@
         <div class="advisory-body">
           <div class="advisory-title">${am.label}</div>
           <div class="advisory-reasons">${advisory.reasons.join(" &nbsp;•&nbsp; ")}</div>
-          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}<br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.</div>
+          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}<br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.${ndrrmcLikely ? `<br><br>📱 <strong>You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level</strong> — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins. If your phone buzzes with a loud alert tone, this is why.` : ""}</div>
         </div>
       </section>`;
     }
@@ -2147,6 +2261,14 @@
         </div>
       </div>
       <div class="alerts-source-hint">Students, parents, and employees can get alerts here — bookmark <a href="${window.location.origin}${window.location.pathname}#alerts">this page</a>, follow the official <a href="${PAGASA_FB_URL}" target="_blank" rel="noopener">DOST-PAGASA Facebook page</a> embedded below, or tap "Enable Notifications" to get pinged in-browser when a new advisory is issued.</div>
+      <div class="ndrrmc-map">
+        <div class="ndrrmc-map-title">📱 How this compares to your phone's NDRRMC/NTC emergency alert</div>
+        <div class="ndrrmc-map-row"><span class="ndrrmc-dot" style="background:#22c55e"></span><strong>Hayo</strong> — no cell-broadcast alert expected</div>
+        <div class="ndrrmc-map-row"><span class="ndrrmc-dot" style="background:#eab308"></span><strong>Hinay</strong> — usually no cell-broadcast alert (Yellow rainfall doesn't trigger NDRRMC's system)</div>
+        <div class="ndrrmc-map-row"><span class="ndrrmc-dot" style="background:#f97316"></span><strong>Hinga</strong> — an NDRRMC emergency mobile alert is likely (Orange rainfall/cyclone bulletins trigger it)</div>
+        <div class="ndrrmc-map-row"><span class="ndrrmc-dot" style="background:#ef4444"></span><strong>Hinto</strong> — an NDRRMC emergency mobile alert is likely (Red rainfall/cyclone bulletins trigger it)</div>
+        <div class="ndrrmc-map-note">NDRRMC's alerts arrive straight from telcos (Cell Broadcast Service, RA 10639) — this dashboard can't fetch or display those messages directly since there's no public feed for them. This mapping only tells you when one is plausible, based on the same PAGASA thresholds NDRRMC itself uses to trigger them.</div>
+      </div>
       ${alertsHtml}
       <div class="pagasa-live-block">
         <div class="pagasa-live-head" style="justify-content:space-between;flex-wrap:wrap">
@@ -2246,6 +2368,33 @@
           ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
         </a>
       </div>
+    </section>`;
+
+    // ---- Tide & Coastal Flood Risk ----
+    const tide = state.tide;
+    const riskNote = tideRiskNote(advisory, tide);
+    let tideBody;
+    if(tide && tide.available){
+      const trendLabel = tide.trend === "rising" ? "↑ Rising" : tide.trend === "falling" ? "↓ Falling" : "→ Steady";
+      tideBody = [
+        detailCard("rgba(56,189,248,0.2)", SM.waves.replace('stroke="currentColor"','stroke="#7dd3fc"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Current Sea Level", tide.curHeight!=null ? tide.curHeight.toFixed(2)+" m" : "—", trendLabel),
+        detailCard("rgba(37,99,235,0.22)", SM.trend.replace('stroke="currentColor"','stroke="#60a5fa"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Next High Tide", tide.nextHigh ? formatTime(tide.nextHigh.t) : "No data", tide.nextHigh ? "~" + tide.nextHigh.height.toFixed(2) + " m (modeled)" : "—"),
+        detailCard("rgba(14,165,233,0.22)", SM.trend.replace('stroke="currentColor"','stroke="#38bdf8"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px;transform:scaleY(-1)"'), "Next Low Tide", tide.nextLow ? formatTime(tide.nextLow.t) : "No data", tide.nextLow ? "~" + tide.nextLow.height.toFixed(2) + " m (modeled)" : "—"),
+      ].join("");
+    }else{
+      tideBody = `<div class="detail-card glass-light" style="grid-column:1/-1">
+        <div class="detail-label">Tide Data</div>
+        <div class="detail-val" style="font-size:0.95rem">Unavailable right now</div>
+        <div class="detail-sub">Will retry on next refresh. For an official table meanwhile, see <a href="https://www.tide-forecast.com/locations/Balanga/tides/latest" target="_blank" rel="noopener" style="color:#93c5fd">tide-forecast.com/Balanga</a>.</div>
+      </div>`;
+    }
+    const riskBg = !riskNote ? "" : riskNote.tone==="red" ? "rgba(239,68,68,0.14)" : riskNote.tone==="orange" ? "rgba(249,115,22,0.14)" : "rgba(255,255,255,0.05)";
+    const riskBorder = !riskNote ? "" : riskNote.tone==="red" ? "rgba(239,68,68,0.4)" : riskNote.tone==="orange" ? "rgba(249,115,22,0.4)" : "rgba(255,255,255,0.12)";
+    html += `<section class="glass tide-card">
+      <div class="card-title">${SM.waves.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Tide & Coastal Flood Risk — Manila Bay side</div>
+      <div class="alerts-source-hint">Sea-level data from Open-Meteo's free Marine API (~8km model resolution) — useful for spotting when a high tide overlaps with heavy rain, but not a substitute for an official navigational tide table. For one, see <a href="https://www.tide-forecast.com/locations/Balanga/tides/latest" target="_blank" rel="noopener">tide-forecast.com/Balanga</a>.</div>
+      <div class="details-grid">${tideBody}</div>
+      ${riskNote ? `<div class="pagasa-live-hint" style="margin-top:1rem;padding:0.7rem 0.9rem;border-radius:0.6rem;background:${riskBg};border:1px solid ${riskBorder};color:rgba(255,255,255,0.85);font-size:0.82rem">${riskNote.text}</div>` : ""}
     </section>`;
 
     // Detailed metrics
