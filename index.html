@@ -73,6 +73,26 @@
   .advisory-yellow,.advisory-orange,.advisory-red{animation:advisory-pulse 2.2s ease-in-out infinite}
   @keyframes advisory-pulse{0%,100%{box-shadow:0 8px 30px -10px rgba(0,0,0,0.25)}50%{box-shadow:0 8px 34px -6px var(--adv-border)}}
 
+  /* Weather Alert Popup — grabs attention on page load so anyone visiting
+     (students, parents, employees) sees an active advisory immediately,
+     without having to scroll to the Alerts card. */
+  .wpop-overlay{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:1.25rem;background:rgba(4,8,20,0.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:wpop-fade-in 0.25s ease-out}
+  @keyframes wpop-fade-in{from{opacity:0}to{opacity:1}}
+  .wpop-card{width:100%;max-width:460px;border-radius:1.25rem;background:linear-gradient(rgba(10,16,32,0.97),rgba(10,16,32,0.97)),linear-gradient(var(--adv-bg),var(--adv-bg));border:1.5px solid var(--adv-border);border-top:5px solid var(--adv-color);box-shadow:0 25px 60px -15px rgba(0,0,0,0.6);padding:1.5rem;animation:wpop-pop-in 0.3s cubic-bezier(.34,1.56,.64,1)}
+  @keyframes wpop-pop-in{from{opacity:0;transform:scale(0.92) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+  .wpop-icon{width:3rem;height:3rem;border-radius:0.85rem;background:rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:0.9rem}
+  .wpop-eyebrow{font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.55);margin-bottom:0.25rem}
+  .wpop-title{font-size:1.3rem;font-weight:800;color:var(--adv-color);line-height:1.25;margin-bottom:0.6rem;text-shadow:0 1px 4px rgba(0,0,0,0.6)}
+  .wpop-reasons{font-size:0.85rem;font-weight:600;color:rgba(255,255,255,0.95);line-height:1.5;margin-bottom:0.6rem}
+  .wpop-sub{font-size:0.82rem;color:rgba(255,255,255,0.8);line-height:1.55;margin-bottom:1.1rem}
+  .wpop-actions{display:flex;gap:0.6rem;flex-wrap:wrap}
+  .wpop-btn{flex:1;min-width:120px;padding:0.7rem 1rem;border-radius:0.7rem;font-size:0.85rem;font-weight:700;cursor:pointer;border:none;transition:transform 0.15s,opacity 0.15s;text-align:center}
+  .wpop-btn:active{transform:scale(0.97)}
+  .wpop-btn-primary{background:var(--adv-color);color:#0a1020}
+  .wpop-btn-secondary{background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.18)}
+  .wpop-copied{font-size:0.75rem;color:#6ee7b7;margin-top:0.5rem;font-weight:600;display:none}
+  .wpop-copied.show{display:block}
+
   .pagasa-live-block{margin-top:1.25rem;padding-top:1.1rem;border-top:1px solid rgba(255,255,255,0.12)}
   .pagasa-live-head{display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;font-weight:700;color:rgba(255,255,255,0.9);margin-bottom:0.65rem}
   .fb-page-wrap{width:100%;max-width:900px;border-radius:0.75rem;overflow:hidden;background:rgba(255,255,255,0.04);display:flex;justify-content:center}
@@ -160,6 +180,11 @@
   @media(min-width:640px){.alerts-title{font-size:1.2rem}}
   .alerts-title svg{width:1.2rem;height:1.2rem;color:#fbbf24}
   .alerts-count{padding:0.2rem 0.6rem;background:rgba(244,63,94,0.3);color:#fecdd3;border-radius:999px;font-size:0.7rem;font-weight:700}
+  .notif-btn{padding:0.35rem 0.7rem;border-radius:999px;font-size:0.7rem;font-weight:700;background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.18);cursor:pointer;white-space:nowrap}
+  .notif-btn:disabled{cursor:default;opacity:0.85}
+  .notif-btn.notif-on{background:rgba(34,197,94,0.22);border-color:rgba(34,197,94,0.4);color:#bbf7d0}
+  .alerts-source-hint{font-size:0.78rem;line-height:1.5;color:rgba(255,255,255,0.65);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:0.65rem;padding:0.65rem 0.8rem;margin-bottom:1rem}
+  .alerts-source-hint a{color:#93c5fd;font-weight:600}
   .alerts-empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:2rem 1rem}
   .alerts-empty-icon{width:4rem;height:4rem;border-radius:999px;background:rgba(52,211,153,0.2);display:flex;align-items:center;justify-content:center;margin-bottom:1rem}
   .alerts-empty-icon svg{width:2rem;height:2rem;color:#6ee7b7}
@@ -396,6 +421,10 @@
   <div id="dashboardRoot" style="display:none"></div>
 
 </main>
+
+<!-- Weather Alert Popup — separate from dashboardRoot so it survives the
+     dashboard's own 5-minute auto-refresh re-renders without flicker. -->
+<div id="weatherPopupRoot"></div>
 
 <!-- =============== APP FOOTER =============== -->
 <footer class="app-footer">
@@ -672,6 +701,7 @@
     titleFlashTimer: null,
     titleFlashOn: false,
     usingMock: false,
+    lastNotifiedSignature: null,
   };
 
   // Flash the browser tab title when a warning is active, so staff monitoring
@@ -1164,6 +1194,132 @@
     if(level==="orange") return { color:"#f97316", bg:"rgba(249,115,22,0.16)", border:"rgba(249,115,22,0.5)", label:"HINGA — ORANGE WARNING" };
     if(level==="yellow") return { color:"#eab308", bg:"rgba(234,179,8,0.16)", border:"rgba(234,179,8,0.5)", label:"HINAY — YELLOW WARNING" };
     return { color:"#22c55e", bg:"rgba(34,197,94,0.12)", border:"rgba(34,197,94,0.4)", label:"HAYO — NO WARNING" };
+  }
+
+  // ========== Weather Alert Popup ==========
+  // Purpose: an in-page popup that grabs attention the moment someone opens
+  // the site (student, parent, employee) whenever an advisory is active —
+  // plus an optional native browser notification for anyone who keeps the
+  // tab open, and a one-tap "Share" so it's easy to forward into a
+  // Messenger/SMS/group-chat announcement to the wider community.
+  const POPUP_DISMISS_KEY = "weatherPopupDismissedSig_v1";
+  const NOTIF_ASKED_KEY = "weatherNotifAsked_v1";
+  const PAGASA_FB_URL = "https://www.facebook.com/PAGASA.DOST.GOV.PH/";
+
+  // Coarse signature: only changes on a real escalation/de-escalation (not
+  // on tiny mm/km-h fluctuations between polls), so the popup doesn't nag
+  // every 5 minutes for the same ongoing advisory.
+  function alertSignature(advisory){
+    return advisory.level + ":" + (advisory.wind ? advisory.wind.signal : 0) + ":" + (advisory.rainfall ? advisory.rainfall.level : "none");
+  }
+
+  // Where to actually verify/track alerts — used both in the popup UI and
+  // in the shareable text, so anyone forwarding it gives recipients a real
+  // place to check, not just a screenshot.
+  function alertsPageLink(){
+    try{ return window.location.origin + window.location.pathname + "#alerts"; }
+    catch(e){ return "#alerts"; }
+  }
+
+  function requestNotifPermission(){
+    if(typeof Notification === "undefined") return;
+    try{ localStorage.setItem(NOTIF_ASKED_KEY, "1"); }catch(e){}
+    Notification.requestPermission().then(() => { renderNotifButton(); });
+  }
+
+  function renderNotifButton(){
+    const btn = document.getElementById("notifBtn");
+    if(!btn || typeof Notification === "undefined") return;
+    if(Notification.permission === "granted"){
+      btn.textContent = "🔔 Notifications On";
+      btn.disabled = true;
+      btn.classList.add("notif-on");
+    }else if(Notification.permission === "denied"){
+      btn.textContent = "🔕 Notifications Blocked";
+      btn.disabled = true;
+    }else{
+      btn.textContent = "🔔 Enable Notifications";
+      btn.disabled = false;
+    }
+  }
+
+  function renderAlertPopup(advisory, am, learningModeText){
+    const popupRoot = document.getElementById("weatherPopupRoot");
+    if(!popupRoot) return;
+    const sig = alertSignature(advisory);
+
+    // Native browser notification — fires for anyone who already granted
+    // permission, any time the signature actually changes (new advisory or
+    // an escalation), so people who keep this tab open in the background
+    // (e.g. a teacher's or guard's desk) still get pinged.
+    if(typeof Notification !== "undefined" && Notification.permission === "granted"){
+      if(state.lastNotifiedSignature !== null && state.lastNotifiedSignature !== sig && advisory.level !== "none"){
+        try{
+          const n = new Notification(am.label, {
+            body: (advisory.reasons.join(" ") || "Weather conditions have changed.") + " Tap to view details.",
+            tag: "weather-advisory",
+            renotify: true,
+          });
+          n.onclick = () => { window.focus(); n.close(); };
+        }catch(e){ /* Notification constructor can throw on some mobile browsers */ }
+      }
+    }
+    state.lastNotifiedSignature = sig;
+
+    if(advisory.level === "none"){ popupRoot.innerHTML = ""; return; }
+
+    let dismissed = "";
+    try{ dismissed = localStorage.getItem(POPUP_DISMISS_KEY) || ""; }catch(e){}
+    if(dismissed === sig){ popupRoot.innerHTML = ""; return; }
+
+    const link = alertsPageLink();
+    const shareText = am.label + "\n\n"
+      + advisory.reasons.join("\n") + "\n\n"
+      + learningModeText + "\n\n"
+      + "This is a local estimate from live weather data — not an official PAGASA/DepEd/LGU announcement. Please confirm with official channels.\n\n"
+      + "Live dashboard: " + link + "\n"
+      + "Official PAGASA page: " + PAGASA_FB_URL;
+
+    popupRoot.innerHTML = `<div class="wpop-overlay" id="wpopOverlay">
+      <div class="wpop-card" style="--adv-color:${am.color};--adv-bg:${am.bg};--adv-border:${am.border}">
+        <div class="wpop-icon">${SM.alertTri.replace('stroke="currentColor"','stroke="'+am.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:26px;height:26px"')}</div>
+        <div class="wpop-eyebrow">Weather Advisory</div>
+        <div class="wpop-title">${am.label}</div>
+        <div class="wpop-reasons">${advisory.reasons.join("<br>")}</div>
+        <div class="wpop-sub">${learningModeText}<br><br>This is a local estimate from live weather data — not an official PAGASA/DepEd/LGU announcement. Please confirm with official channels before acting.<br><br><a href="#alerts" id="wpopAlertsLink" style="color:${am.color};font-weight:700">View live Weather Alerts ↓</a> &nbsp;•&nbsp; <a href="${PAGASA_FB_URL}" target="_blank" rel="noopener" style="color:${am.color};font-weight:700">Official PAGASA Page ↗</a></div>
+        <div class="wpop-actions">
+          <button class="wpop-btn wpop-btn-primary" id="wpopShareBtn">📣 Share This Alert</button>
+          <button class="wpop-btn wpop-btn-secondary" id="wpopCloseBtn">Dismiss</button>
+        </div>
+        <div class="wpop-copied" id="wpopCopied">✓ Copied — paste it into Messenger, SMS, or a group chat</div>
+      </div>
+    </div>`;
+
+    const overlay = document.getElementById("wpopOverlay");
+    const closeBtn = document.getElementById("wpopCloseBtn");
+    const shareBtn = document.getElementById("wpopShareBtn");
+    const alertsLink = document.getElementById("wpopAlertsLink");
+    const copiedEl = document.getElementById("wpopCopied");
+
+    function dismiss(){
+      try{ localStorage.setItem(POPUP_DISMISS_KEY, sig); }catch(e){}
+      popupRoot.innerHTML = "";
+    }
+    if(closeBtn) closeBtn.onclick = dismiss;
+    if(overlay) overlay.addEventListener("click", (e) => { if(e.target === overlay) dismiss(); });
+    if(alertsLink) alertsLink.addEventListener("click", dismiss);
+
+    if(shareBtn) shareBtn.onclick = async () => {
+      if(navigator.share){
+        try{ await navigator.share({ title: am.label, text: shareText }); return; }
+        catch(e){ /* user cancelled or share failed — fall through to copy */ }
+      }
+      try{
+        await navigator.clipboard.writeText(shareText);
+        copiedEl.classList.add("show");
+        setTimeout(() => copiedEl.classList.remove("show"), 3000);
+      }catch(e){ /* clipboard blocked — no-op */ }
+    };
   }
 
   // ========== Alert severity ==========
@@ -1684,6 +1840,7 @@
       orange: "Hinga (Check-in): Academic demands heavily reduced. Focus shifts to well-being checks, review, and low-stakes activities.",
       red:    "Hinto (Stop): Academic learning halted completely. Focus is safety, relief, and basic needs.",
     };
+    renderAlertPopup(advisory, am, LEARNING_MODE[advisory.level]);
     const alertsArr = Array.isArray(d.alerts) ? d.alerts.slice() : [];
     if(advisory.level !== "none"){
       alertsArr.unshift({
@@ -1984,8 +2141,12 @@
     html += `<section id="alerts" class="glass alerts-card">
       <div class="alerts-head">
         <div class="alerts-title">${SM.alertTri.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Weather Alerts</div>
-        ${alertsArr.length ? `<span class="alerts-count">${alertsArr.length} Active</span>` : ""}
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          ${alertsArr.length ? `<span class="alerts-count">${alertsArr.length} Active</span>` : ""}
+          <button id="notifBtn" class="notif-btn" type="button">🔔 Enable Notifications</button>
+        </div>
       </div>
+      <div class="alerts-source-hint">Students, parents, and employees can get alerts here — bookmark <a href="${window.location.origin}${window.location.pathname}#alerts">this page</a>, follow the official <a href="${PAGASA_FB_URL}" target="_blank" rel="noopener">DOST-PAGASA Facebook page</a> embedded below, or tap "Enable Notifications" to get pinged in-browser when a new advisory is issued.</div>
       ${alertsHtml}
       <div class="pagasa-live-block">
         <div class="pagasa-live-head" style="justify-content:space-between;flex-wrap:wrap">
@@ -2176,6 +2337,12 @@
     // Bind refresh button (in case of re-render)
     const rBtn = document.getElementById("refreshBtn1");
     if(rBtn) rBtn.onclick = () => fetchAllWeather();
+
+    // Bind the "Enable Notifications" button in the Alerts card (re-render
+    // wipes and recreates it every refresh, so this rebinds each time).
+    const notifBtn = document.getElementById("notifBtn");
+    if(notifBtn) notifBtn.onclick = requestNotifPermission;
+    renderNotifButton();
   }
 
   // ========== Settings panel ==========
