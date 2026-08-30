@@ -290,7 +290,22 @@
   .config-info{padding:0.9rem 1rem;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);border-radius:0.6rem;font-size:0.8rem;color:#a7f3d0;margin-bottom:1rem;line-height:1.55}
   .config-btn{padding:0.5rem;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);border-radius:0.75rem;transition:all .2s;display:inline-flex;align-items:center;justify-content:center;width:2.25rem;height:2.25rem}
   .config-btn:hover{background:rgba(255,255,255,0.2)}
+
+  /* GIS Barangay Map */
+  .gis-card{padding:1.25rem;margin-bottom:1.5rem}
+  #gisMapCanvas{width:100%;height:440px;border-radius:0.85rem;overflow:hidden;background:#0a1020}
+  .gis-legend{display:flex;flex-wrap:wrap;gap:0.9rem;margin-top:0.9rem;font-size:0.78rem;color:rgba(255,255,255,0.75)}
+  .gis-legend-item{display:flex;align-items:center;gap:0.4rem}
+  .gis-legend-dot{width:0.7rem;height:0.7rem;border-radius:50%;flex-shrink:0}
+  .gis-note{margin-top:0.9rem;font-size:0.75rem;color:rgba(255,255,255,0.5);line-height:1.55;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:0.6rem;padding:0.7rem 0.85rem}
+  .leaflet-popup-content-wrapper{background:#12192e;color:#fff;border-radius:0.6rem}
+  .leaflet-popup-tip{background:#12192e}
+  .leaflet-popup-content{font-size:0.8rem;line-height:1.5}
+  .leaflet-popup-content b{font-size:0.85rem}
+  .leaflet-container a.leaflet-popup-close-button{color:rgba(255,255,255,0.6)}
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body class="gradient-default" id="appBody">
 
@@ -395,6 +410,16 @@
     </label>
   </div>
   <div class="config-field">
+    <label for="pagasaLevel">Official PAGASA rainfall warning level (drives the dashboard's Hayo/Hinay/Hinga/Hinto banner)</label>
+    <select id="pagasaLevel" style="width:100%;padding:0.65rem 0.85rem;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:0.5rem;color:#fff;font-size:0.9rem;font-family:inherit">
+      <option value="">Not specified (informational note only)</option>
+      <option value="yellow">Yellow Rainfall Warning</option>
+      <option value="orange">Orange Rainfall Warning</option>
+      <option value="red">Red Rainfall Warning</option>
+    </select>
+    <div class="config-info" style="margin-top:0.5rem">Per PAGASA's own priority rule, an official level here will always <strong>escalate</strong> the dashboard's displayed level to at least this — it only ever raises it, never silently lowers it below what live conditions already show.</div>
+  </div>
+  <div class="config-field">
     <label for="pagasaNote">Short note (write it yourself, don't paste the post)</label>
     <textarea id="pagasaNote" rows="3" maxlength="280" placeholder="e.g. PAGASA issued Weather Advisory No. 19 for Southwest Monsoon — heavy rain outlook for Bataan over the next 24 hours." style="width:100%;padding:0.65rem 0.85rem;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:0.5rem;color:#fff;font-size:0.9rem;font-family:inherit;resize:vertical"></textarea>
   </div>
@@ -431,6 +456,20 @@
 <!-- Weather Alert Popup — separate from dashboardRoot so it survives the
      dashboard's own 5-minute auto-refresh re-renders without flicker. -->
 <div id="weatherPopupRoot"></div>
+
+<!-- Barangay GIS Map — also kept outside dashboardRoot, for the same reason:
+     Leaflet owns this DOM node directly, so wiping/rebuilding it every
+     5-minute refresh (like the rest of the dashboard) would destroy and
+     reinitialize the whole map, losing pan/zoom and causing flicker. We
+     build it once and only update marker colors/popups on refresh. -->
+<div class="container" style="padding-top:0;display:none">
+  <section class="glass gis-card" id="gisMapSection">
+    <div class="card-title" id="gisMapTitle">Barangay Warning Map — City of Balanga</div>
+    <div id="gisMapCanvas"></div>
+    <div class="gis-legend" id="gisLegend"></div>
+    <div class="gis-note">Shows all 25 barangays of Balanga City. This dashboard currently pulls one weather reading for the whole city, so every barangay marker shares the same live-estimated warning level — it is not yet per-barangay data. Tap a marker for that barangay's name and the current citywide level.</div>
+  </section>
+</div>
 
 <!-- =============== APP FOOTER =============== -->
 <footer class="app-footer">
@@ -535,16 +574,17 @@
   function loadPagasaAdvisory(){
     try{
       const raw = localStorage.getItem(PAGASA_ADVISORY_KEY);
-      if(!raw) return { active:false, note:"", url:"", updatedAt:0 };
+      if(!raw) return { active:false, note:"", url:"", level:"", updatedAt:0 };
       const a = JSON.parse(raw);
       return {
         active: !!a.active,
         note: a.note || "",
         url: a.url || "",
+        level: ["yellow","orange","red"].includes(a.level) ? a.level : "",
         updatedAt: a.updatedAt || 0,
       };
     }catch(e){
-      return { active:false, note:"", url:"", updatedAt:0 };
+      return { active:false, note:"", url:"", level:"", updatedAt:0 };
     }
   }
   function savePagasaAdvisory(a){
@@ -597,7 +637,7 @@
     const rows = parseCSV(text);
     const fallback = {
       announcement: { active:false, source:"", note:"", url:"", updatedAt:0 },
-      pagasaAdvisory: { active:false, note:"", url:"", updatedAt:0 },
+      pagasaAdvisory: { active:false, note:"", url:"", level:"", updatedAt:0 },
     };
     if(rows.length < 2) return fallback;
     const headers = rows[0];
@@ -607,6 +647,7 @@
     const iNote = findCol(headers, "note");
     const iUrl = findCol(headers, "link");
     const iTime = findCol(headers, "timestamp");
+    const iLevel = findCol(headers, "warning level");
     if(iType < 0 || iActive < 0 || iNote < 0) return fallback;
 
     let latestAnn = null, latestPagasa = null;
@@ -634,10 +675,22 @@
       };
     }
     if(latestPagasa){
+      // Normalize free-text level answers ("Orange", "Orange Rainfall
+      // Warning", etc.) down to yellow/orange/red for the priority rule —
+      // anything unrecognized falls back to "" (informational only, no
+      // override), which is the safe default.
+      let lvl = "";
+      if(iLevel >= 0){
+        const raw = (latestPagasa.row[iLevel] || "").toLowerCase();
+        if(raw.includes("red")) lvl = "red";
+        else if(raw.includes("orange")) lvl = "orange";
+        else if(raw.includes("yellow")) lvl = "yellow";
+      }
       result.pagasaAdvisory = {
         active: isYes(latestPagasa.row[iActive]),
         note: (latestPagasa.row[iNote] || "").slice(0, 280),
         url: iUrl >= 0 ? (latestPagasa.row[iUrl] || "") : "",
+        level: lvl,
         updatedAt: latestPagasa.ts && !isNaN(latestPagasa.ts) ? latestPagasa.ts : Date.now(),
       };
     }
@@ -672,7 +725,6 @@
   const REFRESH_MS = 5 * 60 * 1000;
   const API_BASE = "https://api.open-meteo.com/v1/forecast";
   const GEOCODE_BASE = "https://geocoding-api.open-meteo.com/v1/search";
-  const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
   const BASE_TITLE = document.title;
 
   // ====== SHARED LIVE NOTICES (Google Form -> Google Sheet -> CSV) ======
@@ -699,7 +751,6 @@
     announcement: loadAnnouncement(),
     pagasaAdvisory: loadPagasaAdvisory(),
     data: null,
-    tide: null,
     loading: false,
     error: null,
     lastFetch: 0,
@@ -983,7 +1034,6 @@
     phone: smallSvg('<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.33 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>', "currentColor"),
     facebook: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>',
     globe: smallSvg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', "currentColor"),
-    waves: smallSvg('<path d="M2 6c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/><path d="M2 12c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/><path d="M2 18c1.5-1.7 3.5-1.7 5 0s3.5 1.7 5 0 3.5-1.7 5 0 3.5 1.7 5 0"/>', "currentColor"),
   };
 
   // ========== Background gradient based on weather ==========
@@ -1025,6 +1075,15 @@
   // the current single hour's reading is momentarily lower. This is meant to
   // catch slow-moving monsoon/storm rain that never spikes in one hour but
   // still dumps a dangerous, sustained amount of water over time.
+  //
+  // Verified against PAGASA's own published rainfall-warning definitions
+  // (multiple independent sources cross-checked): Yellow 7.5-15mm/hr,
+  // Orange 15-30mm/hr, Red 30mm/hr+ — with an alternate accumulated-total
+  // trigger of >65mm within 3 hours for Red. These numbers are intentionally
+  // NOT the same as a separate spec document's 10-30/30-75/75+mm figures —
+  // that document's numbers don't match any published PAGASA source found,
+  // so this file sticks with the verified PAGASA thresholds below rather
+  // than the spec's unsourced ones.
   const RAINFALL_LEVELS = [
     { level:"red",    min:30,  label:"Red Rainfall Warning",    desc:"Torrential Rain (30mm+/hr). Severe, widespread flooding is expected. EVACUATE: take immediate action, move to safe ground." },
     { level:"orange", min:15,  label:"Orange Rainfall Warning", desc:"Intense Rain (15–30mm/hr). Flooding is highly threatening, landslides can occur. PREPARE: be alert and ready to move." },
@@ -1743,93 +1802,6 @@
   }
 
 
-  // ========== Tide & Coastal Flood Risk ==========
-  // Balanga City sits right on Manila Bay, so an incoming high tide can slow
-  // drainage during heavy rain and raise flood risk in low-lying/coastal
-  // barangays. Open-Meteo's free Marine API (same provider as the main
-  // forecast above, no key needed) exposes modeled sea-level height
-  // (sea_level_height_msl, tidal signal included) as an hourly series. We
-  // derive high/low tide times ourselves by finding local peaks/troughs in
-  // that series — there's no separate "tide table" endpoint.
-  //
-  // Caveats (shown to the user in the card itself too):
-  //  - The underlying model is ~8km resolution and isn't tuned for complex,
-  //    semi-enclosed coastlines like Manila Bay, so treat this as a general
-  //    planning/awareness signal, not a precise navigational tide table.
-  //  - Heights are relative to mean sea level, not the "chart datum" (e.g.
-  //    Mean Lower Low Water) that official tide tables use, so raw numbers
-  //    won't exactly match sites like tide-forecast.com — the *timing* of
-  //    highs/lows is the useful part here.
-  async function fetchTideData(lat, lon){
-    try{
-      const params = new URLSearchParams({
-        latitude: lat,
-        longitude: lon,
-        hourly: "sea_level_height_msl",
-        timezone: "Asia/Manila",
-        past_hours: "6",
-        forecast_days: "3",
-      });
-      const res = await fetch(MARINE_API_BASE + "?" + params.toString());
-      if(!res.ok) throw new Error("Tide fetch error: HTTP " + res.status);
-      const om = await res.json();
-      const times = safe(om, "hourly.time", []);
-      const heights = safe(om, "hourly.sea_level_height_msl", []);
-      if(!Array.isArray(times) || !Array.isArray(heights) || times.length < 3){
-        throw new Error("Tide data unavailable for this location");
-      }
-      const ts = times.map(t => Math.floor(new Date(t).getTime()/1000));
-
-      // Local peaks = high tide, local troughs = low tide.
-      const points = [];
-      for(let i=1;i<heights.length-1;i++){
-        const prev = heights[i-1], cur = heights[i], next = heights[i+1];
-        if(prev==null || cur==null || next==null) continue;
-        if(cur > prev && cur >= next) points.push({ t: ts[i], height: cur, type: "high" });
-        else if(cur < prev && cur <= next) points.push({ t: ts[i], height: cur, type: "low" });
-      }
-
-      const nowSec = Math.floor(Date.now()/1000);
-
-      // Current level + short-term trend, from the samples bracketing "now".
-      let curIdx = 0;
-      for(let i=0;i<ts.length;i++){ if(ts[i] <= nowSec) curIdx = i; }
-      const curHeight = heights[curIdx];
-      const prevHeight = heights[Math.max(0, curIdx-1)];
-      const trend = curHeight > prevHeight ? "rising" : curHeight < prevHeight ? "falling" : "steady";
-
-      const upcoming = points.filter(p => p.t >= nowSec - 900).sort((a,b) => a.t - b.t);
-      const nextHigh = upcoming.find(p => p.type === "high") || null;
-      const nextLow  = upcoming.find(p => p.type === "low") || null;
-
-      const todayLabel = new Date(nowSec*1000).toDateString();
-      const today = points.filter(p => new Date(p.t*1000).toDateString() === todayLabel);
-
-      return { available:true, curHeight, trend, nextHigh, nextLow, today, generatedAt: Date.now() };
-    }catch(err){
-      console.warn("Tide data unavailable:", err);
-      return { available:false, error: String((err && err.message) || err) };
-    }
-  }
-
-  // Cross-references the tide outlook with the live rainfall advisory level
-  // (computed by computeSuspensionAdvisory) so the card can call out when the
-  // two combine into a higher flood risk, instead of showing them as two
-  // unrelated numbers.
-  function tideRiskNote(advisory, tide){
-    if(!tide || !tide.available) return null;
-    const heavyRain = advisory.level === "orange" || advisory.level === "red";
-    const warnWord = advisory.level === "red" ? "RED" : "ORANGE";
-    const hoursToHigh = tide.nextHigh ? (tide.nextHigh.t - Math.floor(Date.now()/1000)) / 3600 : null;
-    if(heavyRain && hoursToHigh != null && hoursToHigh <= 4){
-      return { tone:"red", text: `⚠️ Elevated flood risk: the ${warnWord} rainfall warning is active while the next high tide approaches (${formatTime(tide.nextHigh.t)}). Drainage into Manila Bay will be slower during this window — low-lying and coastal barangays should watch water levels closely.` };
-    }
-    if(heavyRain){
-      return { tone:"orange", text: `A ${warnWord} rainfall warning is active. Tide isn't at its peak right now, but any downpour timed near the next high tide (${tide.nextHigh ? formatTime(tide.nextHigh.t) : "—"}) will drain more slowly than usual.` };
-    }
-    return { tone:"calm", text: `No active heavy-rainfall warning right now, so tide alone isn't a flood concern. Recheck this if rain conditions worsen.` };
-  }
-
   async function fetchAllWeather(){
     state.loading = true;
     state.error = null;
@@ -1839,11 +1811,6 @@
       const cityCfg = (state.config.city || DEFAULT_CITY).trim();
       const countryCfg = (state.config.country || DEFAULT_COUNTRY).trim();
       const { lat, lon } = await resolveCoords(cityCfg, countryCfg);
-
-      // Kicked off in parallel with the main weather request below. It never
-      // throws (see fetchTideData) so it can't trigger the mock-data
-      // fallback in the catch block just because the marine API hiccups.
-      const tidePromise = fetchTideData(lat, lon);
 
       const params = new URLSearchParams({
         latitude: lat,
@@ -1871,7 +1838,6 @@
       state.data = adaptOpenMeteo(om, cityCfg || DEFAULT_CITY, (countryCfg || DEFAULT_COUNTRY).toUpperCase());
       state.usingMock = false;
       state.lastFetch = Date.now();
-      state.tide = await tidePromise;
     }catch(err){
       console.error(err);
       // Resilient fallback: a safety dashboard should stay usable (and the
@@ -1880,7 +1846,6 @@
       state.data = generateMockData();
       state.usingMock = true;
       state.lastFetch = Date.now();
-      state.tide = state.tide || { available:false };
     }finally{
       state.loading = false;
       renderState();
@@ -1892,17 +1857,20 @@
     const loadingEl = document.getElementById("loadingState");
     const errorEl = document.getElementById("errorState");
     const dashEl = document.getElementById("dashboardRoot");
+    const gisEl = document.getElementById("gisMapSection")?.closest(".container");
 
     if(state.loading && !state.data){
       loadingEl.style.display = "flex";
       errorEl.style.display = "none";
       dashEl.style.display = "none";
+      if(gisEl) gisEl.style.display = "none";
       return;
     }
     if(state.error && !state.data){
       loadingEl.style.display = "none";
       errorEl.style.display = "flex";
       dashEl.style.display = "none";
+      if(gisEl) gisEl.style.display = "none";
       document.getElementById("errorMsg").textContent = state.error;
       return;
     }
@@ -1910,7 +1878,98 @@
     loadingEl.style.display = "none";
     errorEl.style.display = "none";
     dashEl.style.display = "block";
+    if(gisEl) gisEl.style.display = "block";
     renderDashboard();
+  }
+
+  // ========== Barangay GIS Map ==========
+  // All 25 barangays of Balanga City, Bataan, with coordinates cross-checked
+  // against PhilAtlas (sourced from PSA/PSGC data) as of this writing.
+  const BARANGAYS = [
+    { name:"Bagong Silang",     lat:14.6741, lon:120.5104 },
+    { name:"Bagumbayan",        lat:14.6791, lon:120.5440 },
+    { name:"Cabog-Cabog",       lat:14.6252, lon:120.4679 },
+    { name:"Camacho",           lat:14.6825, lon:120.5266 },
+    { name:"Cataning",          lat:14.6747, lon:120.5394 },
+    { name:"Central",           lat:14.6636, lon:120.5381 },
+    { name:"Cupang North",      lat:14.6740, lon:120.5433 },
+    { name:"Cupang Proper",     lat:14.6665, lon:120.5438 },
+    { name:"Cupang West",       lat:14.6696, lon:120.5414 },
+    { name:"Dangcol (Bernabe)", lat:14.6629, lon:120.4691 },
+    { name:"Doña Francisca",    lat:14.6851, lon:120.5434 },
+    { name:"Ibayo",             lat:14.6811, lon:120.5373 },
+    { name:"Lote",              lat:14.6872, lon:120.5538 },
+    { name:"Malabia",           lat:14.6823, lon:120.5397 },
+    { name:"Munting Batangas",  lat:14.6805, lon:120.4990 },
+    { name:"Poblacion",         lat:14.6792, lon:120.5409 },
+    { name:"Pto. Rivas Ibaba",  lat:14.6969, lon:120.5596 },
+    { name:"Pto. Rivas Itaas",  lat:14.6907, lon:120.5566 },
+    { name:"San Jose",          lat:14.6752, lon:120.5359 },
+    { name:"Sibacan",           lat:14.6912, lon:120.5451 },
+    { name:"Talisay",           lat:14.6817, lon:120.5467 },
+    { name:"Tanato",            lat:14.6398, lon:120.4708 },
+    { name:"Tenejero",          lat:14.6790, lon:120.5332 },
+    { name:"Tortugas",          lat:14.6916, lon:120.5599 },
+    { name:"Tuyo",              lat:14.6952, lon:120.5383 },
+  ];
+
+  let gisMap = null;
+  let gisMarkers = {}; // barangay name -> Leaflet circleMarker
+
+  function initGisMap(){
+    if(gisMap || typeof L === "undefined") return; // already built, or Leaflet failed to load (e.g. offline)
+    const canvas = document.getElementById("gisMapCanvas");
+    if(!canvas) return;
+    gisMap = L.map(canvas, { scrollWheelZoom:false }).setView([14.6795, 120.5350], 12.5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+      maxZoom: 18,
+    }).addTo(gisMap);
+
+    BARANGAYS.forEach(b => {
+      const marker = L.circleMarker([b.lat, b.lon], {
+        radius: 9,
+        color: "#22c55e",
+        fillColor: "#22c55e",
+        fillOpacity: 0.85,
+        weight: 2,
+      }).addTo(gisMap);
+      marker.bindPopup(`<b>Brgy. ${b.name}</b><br>Balanga City, Bataan`);
+      gisMarkers[b.name] = marker;
+    });
+  }
+
+  function updateGisMap(advisory, am){
+    if(!gisMap && typeof L !== "undefined") initGisMap();
+    if(!gisMap) return; // Leaflet not available (e.g. no internet to load the CDN)
+
+    // Every barangay currently shares one citywide reading — see the note
+    // under the map. Colors reuse the same scale as the rest of the
+    // dashboard so it stays visually consistent with Hayo/Hinay/Hinga/Hinto.
+    Object.keys(gisMarkers).forEach(name => {
+      const marker = gisMarkers[name];
+      marker.setStyle({ color: am.color, fillColor: am.color, fillOpacity: advisory.level === "none" ? 0.55 : 0.9 });
+      marker.setPopupContent(`<b>Brgy. ${name}</b><br>Balanga City, Bataan<br><span style="color:${am.color};font-weight:700">${am.label}</span>`);
+    });
+
+    const title = document.getElementById("gisMapTitle");
+    if(title) title.textContent = "Barangay Warning Map — City of Balanga (" + am.label + ")";
+
+    const legend = document.getElementById("gisLegend");
+    if(legend){
+      const levels = [
+        { c:"#22c55e", l:"Hayo — No Warning" },
+        { c:"#eab308", l:"Hinay — Yellow" },
+        { c:"#f97316", l:"Hinga — Orange" },
+        { c:"#ef4444", l:"Hinto — Red" },
+      ];
+      legend.innerHTML = levels.map(lv => `<div class="gis-legend-item"><span class="gis-legend-dot" style="background:${lv.c}${lv.c===am.color?';box-shadow:0 0 0 3px '+lv.c+'55':''}"></span>${lv.l}${lv.c===am.color ? ' (current)' : ''}</div>`).join("");
+    }
+
+    // Leaflet sizes itself off the container's dimensions at creation time;
+    // if the map was initialized while its card was offscreen/hidden, tiles
+    // can render at the wrong size until this is called.
+    setTimeout(() => { if(gisMap) gisMap.invalidateSize(); }, 150);
   }
 
   function renderDashboard(){
@@ -1934,7 +1993,24 @@
 
     // Class Suspension Advisory — DepEd Order No. 14, s. 2026 (4H Learning Continuity Framework)
     const advisory = computeSuspensionAdvisory(cur, safe(d, "continuous", null));
+
+    // PAGASA Priority Rule: an official PAGASA-declared level (entered by
+    // staff, or synced from the Google Sheet) always takes priority over
+    // the automated live-data estimate — but specifically by ESCALATING,
+    // never silently downgrading. If PAGASA declared Orange and the live
+    // estimate only reads Yellow, show Orange. If live conditions already
+    // exceed what PAGASA stated (e.g. an outdated note), the higher one
+    // still wins — a real, currently-worsening situation should never be
+    // hidden behind a stale official note.
+    advisory.autoLevel = advisory.level;
+    advisory.pagasaOverride = false;
+    const pagasaDeclared = (state.pagasaAdvisory && state.pagasaAdvisory.active && state.pagasaAdvisory.level) ? state.pagasaAdvisory.level : null;
+    if(pagasaDeclared && LEVEL_RANK[pagasaDeclared] > LEVEL_RANK[advisory.level]){
+      advisory.level = pagasaDeclared;
+      advisory.pagasaOverride = true;
+    }
     const am = advisoryMeta(advisory.level);
+    updateGisMap(advisory, am);
 
     // Open-Meteo has no built-in severe-weather-alerts feed, so when the
     // advisory is active we surface it as a synthetic entry in the Alerts
@@ -2004,9 +2080,9 @@
       html += `<section class="advisory-banner advisory-${advisory.level}" style="--adv-color:${am.color};--adv-bg:${am.bg};--adv-border:${am.border}">
         <div class="advisory-icon">${SM.alertTri.replace('stroke="currentColor"','stroke="'+am.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:24px;height:24px"')}</div>
         <div class="advisory-body">
-          <div class="advisory-title">${am.label}</div>
-          <div class="advisory-reasons">${advisory.reasons.join(" &nbsp;•&nbsp; ")}</div>
-          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}<br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.${ndrrmcLikely ? `<br><br>📱 <strong>You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level</strong> — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins. If your phone buzzes with a loud alert tone, this is why.` : ""}</div>
+          <div class="advisory-title">${am.label}${advisory.pagasaOverride ? ` <span style="font-size:0.7rem;font-weight:700;padding:0.15rem 0.5rem;border-radius:999px;background:rgba(255,255,255,0.15);vertical-align:middle">📋 OFFICIAL PAGASA</span>` : ""}</div>
+          <div class="advisory-reasons">${advisory.reasons.length ? advisory.reasons.join(" &nbsp;•&nbsp; ") : "No automated wind/rain triggers currently — level set by official PAGASA advisory."}</div>
+          <div class="advisory-sub">${scopeText}<br>${LEARNING_MODE[advisory.level]}${advisory.pagasaOverride ? `<br><br>📋 <strong>Escalated to match PAGASA's officially declared level</strong> — the automated live-data estimate alone currently reads ${H_LEVEL[advisory.autoLevel].short} (${H_LEVEL[advisory.autoLevel].label}), but per PAGASA's own priority rule, an official declaration always takes precedence and can only raise the shown level, never lower it below live conditions. See the PAGASA Advisory note below for details/source.` : ""}<br><br><strong>This is an automated estimate from live weather data</strong> using PAGASA's published thresholds — it is not an official announcement. Always confirm with PAGASA, the Balanga City LGU/DRRMO, or the official DepEd Bataan Division advisory before acting.${ndrrmcLikely ? `<br><br>📱 <strong>You may also get an NDRRMC/NTC emergency mobile alert (cell broadcast) on your phone at this level</strong> — NDRRMC automatically triggers those for PAGASA's Orange and Red rainfall warnings and cyclone bulletins. If your phone buzzes with a loud alert tone, this is why.` : ""}</div>
         </div>
       </section>`;
     }
@@ -2043,23 +2119,30 @@
     }
 
     // Manually-curated note pointing to a live PAGASA advisory post (e.g.
-    // "Weather Advisory No. 19"). Shown whenever staff have flagged one,
-    // regardless of what the automated HAYO/HINAY banner above says, since
-    // that banner can't read PAGASA's Facebook content and may lag behind
-    // an official forecast advisory.
+    // "Weather Advisory No. 19"). Shown whenever staff have flagged one.
+    // Colored by its declared level (if any) and labeled to show whether
+    // it's actually the one currently driving the banner above (per the
+    // PAGASA Priority Rule) or just informational context.
     if(state.pagasaAdvisory && state.pagasaAdvisory.active && state.pagasaAdvisory.note){
       const pn = state.pagasaAdvisory;
       const pnWhen = pn.updatedAt ? formatDate(Math.floor(pn.updatedAt/1000)) + " " + formatTime(Math.floor(pn.updatedAt/1000)) : "";
-      html += `<section class="advisory-banner advisory-yellow" style="--adv-color:#eab308;--adv-bg:rgba(234,179,8,0.14);--adv-border:rgba(234,179,8,0.4)">
-        <div class="advisory-icon">${SM.info.replace('stroke="currentColor"','stroke="#eab308"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:22px;height:22px"')}</div>
+      const pnMeta = pn.level ? advisoryMeta(pn.level) : { color:"#eab308", bg:"rgba(234,179,8,0.14)", border:"rgba(234,179,8,0.4)" };
+      const pnLevelTag = pn.level ? H_LEVEL[pn.level].short : "Level not specified";
+      const pnStatus = !pn.level
+        ? "Informational only — no level set, so it doesn't affect the banner above."
+        : advisory.pagasaOverride
+          ? "✅ Currently setting the dashboard's warning level above (per PAGASA's priority rule)."
+          : "ℹ️ Not currently driving the banner above — live-estimated conditions already read the same or higher.";
+      html += `<section class="advisory-banner advisory-${pn.level || 'yellow'}" style="--adv-color:${pnMeta.color};--adv-bg:${pnMeta.bg};--adv-border:${pnMeta.border}">
+        <div class="advisory-icon">${SM.info.replace('stroke="currentColor"','stroke="'+pnMeta.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:22px;height:22px"')}</div>
         <div class="advisory-body">
-          <div class="advisory-title">PAGASA ADVISORY (see live feed below)</div>
+          <div class="advisory-title">PAGASA ADVISORY — ${pnLevelTag} <span style="font-size:0.7rem">(see live feed below)</span></div>
           <div class="advisory-sub" style="font-size:0.88rem;color:#fff;font-weight:600">${str(pn.note).replace(/</g,"&lt;")}</div>
           <div class="advisory-sub" style="margin-top:0.5rem">
             ${pn.url ? `<a href="${str(pn.url)}" target="_blank" rel="noopener" style="color:#fde68a;font-weight:700">View the original post →</a>` : ""}
             ${pnWhen ? ` &nbsp;•&nbsp; Noted ${pnWhen}` : ""}
           </div>
-          <div class="advisory-sub" style="margin-top:0.4rem;opacity:0.85">This is a staff-flagged note, separate from the automated estimate above — always a forecast/outlook, not necessarily current conditions.</div>
+          <div class="advisory-sub" style="margin-top:0.4rem;opacity:0.85">${pnStatus} Staff-flagged, not auto-scraped — always a forecast/outlook, so keep it updated as new bulletins come out.</div>
         </div>
       </section>`;
     }
@@ -2370,33 +2453,6 @@
       </div>
     </section>`;
 
-    // ---- Tide & Coastal Flood Risk ----
-    const tide = state.tide;
-    const riskNote = tideRiskNote(advisory, tide);
-    let tideBody;
-    if(tide && tide.available){
-      const trendLabel = tide.trend === "rising" ? "↑ Rising" : tide.trend === "falling" ? "↓ Falling" : "→ Steady";
-      tideBody = [
-        detailCard("rgba(56,189,248,0.2)", SM.waves.replace('stroke="currentColor"','stroke="#7dd3fc"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Current Sea Level", tide.curHeight!=null ? tide.curHeight.toFixed(2)+" m" : "—", trendLabel),
-        detailCard("rgba(37,99,235,0.22)", SM.trend.replace('stroke="currentColor"','stroke="#60a5fa"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"'), "Next High Tide", tide.nextHigh ? formatTime(tide.nextHigh.t) : "No data", tide.nextHigh ? "~" + tide.nextHigh.height.toFixed(2) + " m (modeled)" : "—"),
-        detailCard("rgba(14,165,233,0.22)", SM.trend.replace('stroke="currentColor"','stroke="#38bdf8"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px;transform:scaleY(-1)"'), "Next Low Tide", tide.nextLow ? formatTime(tide.nextLow.t) : "No data", tide.nextLow ? "~" + tide.nextLow.height.toFixed(2) + " m (modeled)" : "—"),
-      ].join("");
-    }else{
-      tideBody = `<div class="detail-card glass-light" style="grid-column:1/-1">
-        <div class="detail-label">Tide Data</div>
-        <div class="detail-val" style="font-size:0.95rem">Unavailable right now</div>
-        <div class="detail-sub">Will retry on next refresh. For an official table meanwhile, see <a href="https://www.tide-forecast.com/locations/Balanga/tides/latest" target="_blank" rel="noopener" style="color:#93c5fd">tide-forecast.com/Balanga</a>.</div>
-      </div>`;
-    }
-    const riskBg = !riskNote ? "" : riskNote.tone==="red" ? "rgba(239,68,68,0.14)" : riskNote.tone==="orange" ? "rgba(249,115,22,0.14)" : "rgba(255,255,255,0.05)";
-    const riskBorder = !riskNote ? "" : riskNote.tone==="red" ? "rgba(239,68,68,0.4)" : riskNote.tone==="orange" ? "rgba(249,115,22,0.4)" : "rgba(255,255,255,0.12)";
-    html += `<section class="glass tide-card">
-      <div class="card-title">${SM.waves.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Tide & Coastal Flood Risk — Manila Bay side</div>
-      <div class="alerts-source-hint">Sea-level data from Open-Meteo's free Marine API (~8km model resolution) — useful for spotting when a high tide overlaps with heavy rain, but not a substitute for an official navigational tide table. For one, see <a href="https://www.tide-forecast.com/locations/Balanga/tides/latest" target="_blank" rel="noopener">tide-forecast.com/Balanga</a>.</div>
-      <div class="details-grid">${tideBody}</div>
-      ${riskNote ? `<div class="pagasa-live-hint" style="margin-top:1rem;padding:0.7rem 0.9rem;border-radius:0.6rem;background:${riskBg};border:1px solid ${riskBorder};color:rgba(255,255,255,0.85);font-size:0.82rem">${riskNote.text}</div>` : ""}
-    </section>`;
-
     // Detailed metrics
     const curVis = num(safe(cur,"visibility"),10000);
     const curPressure = num(safe(cur,"main.pressure"),1013);
@@ -2508,6 +2564,7 @@
     const annUrl = document.getElementById("annUrl");
     const saveAnnBtn = document.getElementById("saveAnnouncementBtn");
     const pagasaActive = document.getElementById("pagasaActive");
+    const pagasaLevel = document.getElementById("pagasaLevel");
     const pagasaNote = document.getElementById("pagasaNote");
     const pagasaUrl = document.getElementById("pagasaUrl");
     const savePagasaBtn = document.getElementById("savePagasaAdvisoryBtn");
@@ -2533,6 +2590,7 @@
     annUrl.value = state.announcement.url || "";
 
     pagasaActive.checked = !!state.pagasaAdvisory.active;
+    pagasaLevel.value = state.pagasaAdvisory.level || "";
     pagasaNote.value = state.pagasaAdvisory.note || "";
     pagasaUrl.value = state.pagasaAdvisory.url || "";
 
@@ -2574,6 +2632,7 @@
         active: pagasaActive.checked,
         note: pagasaNote.value.trim().slice(0, 280),
         url: pagasaUrl.value.trim(),
+        level: pagasaLevel.value || "",
         updatedAt: Date.now(),
       };
       state.pagasaAdvisory = newNote;
