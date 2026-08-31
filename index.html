@@ -536,6 +536,7 @@
         <ul class="footer-links">
           <li><a href="https://www.deped.gov.ph" target="_blank" rel="noopener">Department of Education</a></li>
           <li><a href="https://www.pagasa.dost.gov.ph" target="_blank" rel="noopener">PAGASA Weather Bureau</a></li>
+          <li><a href="https://pagasa.dost.gov.ph/weather/weather-advisory" target="_blank" rel="noopener">PAGASA Weather Advisory</a></li>
           <li><a href="https://ndrrmc.gov.ph" target="_blank" rel="noopener">NDRRMC Philippines</a></li>
           <li><a href="https://cityofbalanga.gov.ph" target="_blank" rel="noopener">City Government of Balanga</a></li>
         </ul>
@@ -1359,6 +1360,12 @@
   const POPUP_DISMISS_KEY = "weatherPopupDismissedSig_v1";
   const NOTIF_ASKED_KEY = "weatherNotifAsked_v1";
   const PAGASA_FB_URL = "https://www.facebook.com/PAGASA.DOST.GOV.PH/";
+  // PAGASA's official Weather Advisory page — publishes numbered advisory
+  // bulletins (e.g. "WEATHER ADVISORY NO. 34") as a PDF. The page itself
+  // just embeds that PDF, so we link out to it rather than trying to
+  // iframe or scrape it (no reliable CORS access from the browser, and
+  // the PDF filename/content changes whenever PAGASA issues a new one).
+  const PAGASA_ADVISORY_PAGE_URL = "https://pagasa.dost.gov.ph/weather/weather-advisory";
 
   // Coarse signature: only changes on a real escalation/de-escalation (not
   // on tiny mm/km-h fluctuations between polls), so the popup doesn't nag
@@ -2762,6 +2769,22 @@
           </div>
         </div>
         <p class="pagasa-live-hint">This is the actual live DOST-PAGASA Facebook feed, embedded directly from Facebook — not a copy. Bulletins appear here as soon as PAGASA posts them.</p>
+      </div>
+
+      <div class="pagasa-live-block">
+        <div class="pagasa-live-head">
+          <span class="live-dot" style="background:#38bdf8"></span>
+          <span>PAGASA Official Weather Advisory (PDF bulletin)</span>
+        </div>
+        <p class="pagasa-live-hint" style="margin-top:0;margin-bottom:0.7rem">
+          PAGASA's own Weather Advisory page publishes its numbered advisory bulletins as a PDF that updates as new ones are issued — it can't be reliably embedded here (the source page doesn't allow framing, and the file changes without notice), so this opens the current bulletin directly on PAGASA's site in a new tab.
+        </p>
+        <a href="${PAGASA_ADVISORY_PAGE_URL}"
+           target="_blank" rel="noopener" class="msn-link-btn">
+          ${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
+          Open PAGASA Weather Advisory
+          ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
+        </a>
       </div>
 
       <div class="pagasa-live-block">
