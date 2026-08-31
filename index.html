@@ -2540,38 +2540,6 @@
       </section>`;
     }
 
-    // Hazard Susceptibility card — Landslide and Storm Surge are citywide
-    // reference values (staff-entered from UP NOAH's tool, no shapefiles
-    // supplied for those two), while Flood now points down to the detailed
-    // barangay-level map instead of repeating a single citywide number,
-    // since real per-barangay flood data exists there.
-    {
-      const hz = state.hazard;
-      const floodMeta = hazardLevelMeta(hz.flood);
-      const landslideMeta = hazardLevelMeta(hz.landslide);
-      const surgeMeta = hazardLevelMeta(hz.stormSurge);
-      const hzWhen = hz.updatedAt ? formatDate(Math.floor(hz.updatedAt/1000)) : "";
-      html += `<section class="glass hazard-card">
-        <div class="card-title">🗺️ Flood Hazard Susceptibility (UP NOAH)</div>
-        <div class="hazard-grid">
-          <div class="hazard-item" style="--hz-color:${floodMeta.color}">
-            <div class="hazard-item-label">🌊 Flood Hazard <span style="font-weight:400;opacity:0.7">(citywide ref.)</span></div>
-            <div class="hazard-item-level">${floodMeta.label}</div>
-            <a href="#gisMapSection" class="hazard-item-link">See barangay-level map ↓</a>
-          </div>
-          <div class="hazard-item" style="--hz-color:${landslideMeta.color}">
-            <div class="hazard-item-label">⛰️ Landslide Hazard</div>
-            <div class="hazard-item-level">${landslideMeta.label}</div>
-          </div>
-          <div class="hazard-item" style="--hz-color:${surgeMeta.color}">
-            <div class="hazard-item-label">🌪️ Storm Surge Hazard</div>
-            <div class="hazard-item-level">${surgeMeta.label}</div>
-          </div>
-        </div>
-        <div class="gis-note" style="margin-top:1rem">Static geohazard reference data — not live weather, so it won't change between refreshes. Flood is based on the 100-year rain-return simulation, landslide on shallow/structurally-controlled susceptibility, and storm surge on a 5-metre scenario. Source: <a href="${NOAH_URL}" target="_blank" rel="noopener">UP NOAH's Know Your Hazards tool</a>${hzWhen ? ` · entered ${hzWhen}` : ""}. Staff can update these in Settings.</div>
-      </section>`;
-    }
-
     // Manually-curated official announcement (admin-entered via Settings —
     // e.g. staff spotted a real "Walang Pasok"/class suspension post from
     // the Mayor or PCO and flagged it here). Never auto-scraped; always a
@@ -2931,6 +2899,39 @@
         return `<div class="alerts-source-hint" style="margin:1rem 0 0">📡 Nearest PAGASA Automated Rain Gauge — <strong>${str(pa.siteName)}</strong>: ${str(pa.hourlyRain) || "—"} mm/hr, last updated ${str(pa.lastUpdated) || "unknown"}. This station is ~30km from Balanga and can go stale for long stretches, so it's shown for cross-reference only — it does not drive the warning level above. <a href="${pa.url}" target="_blank" rel="noopener">View full ARG table →</a></div>`;
       })()}
     </section>`;
+
+    // Hazard Susceptibility card — Landslide and Storm Surge are citywide
+    // reference values (staff-entered from UP NOAH's tool, no shapefiles
+    // supplied for those two), while Flood now points down to the detailed
+    // barangay-level map instead of repeating a single citywide number,
+    // since real per-barangay flood data exists there. Placed right before
+    // the Tide Forecast card since both are coastal/flood-context cards.
+    {
+      const hz = state.hazard;
+      const floodMeta = hazardLevelMeta(hz.flood);
+      const landslideMeta = hazardLevelMeta(hz.landslide);
+      const surgeMeta = hazardLevelMeta(hz.stormSurge);
+      const hzWhen = hz.updatedAt ? formatDate(Math.floor(hz.updatedAt/1000)) : "";
+      html += `<section class="glass hazard-card">
+        <div class="card-title">🗺️ Flood Hazard Susceptibility (UP NOAH)</div>
+        <div class="hazard-grid">
+          <div class="hazard-item" style="--hz-color:${floodMeta.color}">
+            <div class="hazard-item-label">🌊 Flood Hazard <span style="font-weight:400;opacity:0.7">(citywide ref.)</span></div>
+            <div class="hazard-item-level">${floodMeta.label}</div>
+            <a href="#gisMapSection" class="hazard-item-link">See barangay-level map ↓</a>
+          </div>
+          <div class="hazard-item" style="--hz-color:${landslideMeta.color}">
+            <div class="hazard-item-label">⛰️ Landslide Hazard</div>
+            <div class="hazard-item-level">${landslideMeta.label}</div>
+          </div>
+          <div class="hazard-item" style="--hz-color:${surgeMeta.color}">
+            <div class="hazard-item-label">🌪️ Storm Surge Hazard</div>
+            <div class="hazard-item-level">${surgeMeta.label}</div>
+          </div>
+        </div>
+        <div class="gis-note" style="margin-top:1rem">Static geohazard reference data — not live weather, so it won't change between refreshes. Flood is based on the 100-year rain-return simulation, landslide on shallow/structurally-controlled susceptibility, and storm surge on a 5-metre scenario. Source: <a href="${NOAH_URL}" target="_blank" rel="noopener">UP NOAH's Know Your Hazards tool</a>${hzWhen ? ` · entered ${hzWhen}` : ""}. Staff can update these in Settings.</div>
+      </section>`;
+    }
 
     // Tide Forecast — see fetchTideForecast()/findTideEvents() for how this
     // is derived. Shown as its own card since it's a distinct data source
