@@ -1366,6 +1366,12 @@
   // iframe or scrape it (no reliable CORS access from the browser, and
   // the PDF filename/content changes whenever PAGASA issues a new one).
   const PAGASA_ADVISORY_PAGE_URL = "https://pagasa.dost.gov.ph/weather/weather-advisory";
+  // IQAir's Balanga air-quality page (AQI, PM2.5, hourly/daily forecast).
+  // IQAir's public widget product requires a signed-in account to
+  // generate an embeddable iframe, so — same reasoning as the PAGASA
+  // Advisory PDF and MSN Severe Weather links above — this links out to
+  // the live page rather than trying to embed or scrape it.
+  const IQAIR_BALANGA_URL = "https://www.iqair.com/air-quality/philippines/central-luzon/balanga";
 
   // Coarse signature: only changes on a real escalation/de-escalation (not
   // on tiny mm/km-h fluctuations between polls), so the popup doesn't nag
@@ -2694,6 +2700,16 @@
     html += `<section class="glass daily-card">
       <div class="card-title">${SM.cloudRain.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} 5-Day Forecast</div>
       <div class="daily-grid">${dailyItems}</div>
+    </section>`;
+
+    html += `<section class="glass daily-card">
+      <div class="card-title">${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Air Quality — Balanga City (IQAir)</div>
+      <div class="alerts-source-hint" style="margin-bottom:0">Real-time AQI, PM2.5, and an hourly/daily air-quality forecast for Balanga City from IQAir's monitoring network. This is a live external page, not something we can pull numbers from directly here (IQAir's embeddable widget requires a signed-in account), so it opens in a new tab.</div>
+      <a href="${IQAIR_BALANGA_URL}" target="_blank" rel="noopener" class="msn-link-btn" style="margin-top:0.85rem">
+        ${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
+        Open Balanga Air Quality on IQAir
+        ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
+      </a>
     </section>`;
 
     // Alerts
