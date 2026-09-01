@@ -164,6 +164,21 @@
   .daily-icon svg{width:100%;height:100%}
   .daily-cond{font-size:0.7rem;letter-spacing:0.05em;text-transform:uppercase;color:rgba(255,255,255,0.6);margin-bottom:0.5rem;font-weight:600}
   .daily-temps{display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-bottom:0.5rem}
+
+  .aqi-hero{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:0.9rem}
+  .aqi-number-wrap{display:flex;align-items:baseline;gap:0.5rem}
+  .aqi-number{font-size:3rem;font-weight:800;line-height:1;text-shadow:0 2px 10px rgba(0,0,0,0.25)}
+  .aqi-scale-label{font-size:0.72rem;color:rgba(255,255,255,0.65);font-weight:600;letter-spacing:0.03em}
+  .aqi-badge{padding:0.4rem 0.9rem;border-radius:999px;font-size:0.8rem;font-weight:700;white-space:nowrap}
+  .aqi-bar-track{width:100%;height:0.6rem;border-radius:999px;background:rgba(255,255,255,0.12);overflow:hidden;margin-bottom:0.6rem;position:relative}
+  .aqi-bar-fill{height:100%;border-radius:999px;transition:width .5s ease}
+  .aqi-advice{font-size:0.88rem;font-weight:600;margin-bottom:1.1rem;line-height:1.45}
+  .aqi-hourly-row{display:flex;gap:0.6rem;overflow-x:auto;padding-bottom:0.3rem;scrollbar-width:none;-ms-overflow-style:none}
+  .aqi-hourly-row::-webkit-scrollbar{display:none}
+  .aqi-hour-chip{display:flex;flex-direction:column;align-items:center;gap:0.3rem;padding:0.65rem 0.55rem;border-radius:0.85rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);min-width:3.7rem;flex-shrink:0}
+  .aqi-hour-time{font-size:0.65rem;color:rgba(255,255,255,0.6);font-weight:600}
+  .aqi-hour-val{font-size:1rem;font-weight:800}
+  .aqi-hour-pm{font-size:0.62rem;color:rgba(255,255,255,0.55)}
   .daily-hi{font-weight:800}
   .daily-sep{color:rgba(255,255,255,0.4)}
   .daily-lo{color:rgba(255,255,255,0.7)}
@@ -808,6 +823,12 @@
   const API_BASE = "https://api.open-meteo.com/v1/forecast";
   const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
   const GEOCODE_BASE = "https://geocoding-api.open-meteo.com/v1/search";
+  // Same Open-Meteo family as the weather/marine/geocoding calls above —
+  // free, no API key, CORS-enabled from the browser. Backed by CAMS
+  // atmospheric-composition models (not a ground sensor), so it's a
+  // location-based estimate; the IQAir link in the Air Quality card
+  // below points to actual nearby monitoring stations for comparison.
+  const AIR_QUALITY_API_BASE = "https://air-quality-api.open-meteo.com/v1/air-quality";
   const BASE_TITLE = document.title;
 
   // ====== SHARED LIVE NOTICES (Google Form -> Google Sheet -> CSV) ======
@@ -848,6 +869,7 @@
     pagasaLive: null,
     pagasaArg: null,
     tide: null,
+    airQuality: null,
   };
 
   // Flash the browser tab title when a warning is active, so staff monitoring
@@ -2053,6 +2075,60 @@
     }
   }
 
+  async function fetchAirQuality(lat, lon){
+    try{
+      const params = new URLSearchParams({
+        latitude: lat,
+        longitude: lon,
+        current: "us_aqi,pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
+        hourly: "us_aqi,pm2_5",
+        timezone: "Asia/Manila",
+        forecast_days: "2",
+      });
+      const res = await fetch(AIR_QUALITY_API_BASE + "?" + params.toString());
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const j = await res.json();
+      const cur = safe(j, "current", {});
+      const times = safe(j, "hourly.time", []);
+      const hourlyAqi = safe(j, "hourly.us_aqi", []);
+      const hourlyPm25 = safe(j, "hourly.pm2_5", []);
+      const nowMs = Date.now();
+      let startIdx = Array.isArray(times) ? times.findIndex(t => new Date(t).getTime() >= nowMs - 30*60*1000) : -1;
+      if(startIdx < 0) startIdx = 0;
+      const hourly = (Array.isArray(times) ? times : []).slice(startIdx, startIdx + 8).map((t, i) => ({
+        timeMs: new Date(t).getTime(),
+        aqi: Number(hourlyAqi[startIdx + i]),
+        pm25: Number(hourlyPm25[startIdx + i]),
+      })).filter(h => isFinite(h.timeMs));
+      state.airQuality = {
+        ok: true,
+        usAqi: Number(safe(cur, "us_aqi")),
+        pm25: Number(safe(cur, "pm2_5")),
+        pm10: Number(safe(cur, "pm10")),
+        o3: Number(safe(cur, "ozone")),
+        no2: Number(safe(cur, "nitrogen_dioxide")),
+        so2: Number(safe(cur, "sulphur_dioxide")),
+        co: Number(safe(cur, "carbon_monoxide")),
+        hourly,
+        fetchedAt: Date.now(),
+      };
+    }catch(err){
+      state.airQuality = { ok:false, corsBlocked:true, fetchedAt: Date.now() };
+    }
+  }
+
+  // EPA US AQI bands — mirrors the same "color-coded threshold" pattern
+  // used for the PAGASA rainfall/wind advisoryMeta() above, plus a short
+  // school-context health note per band.
+  function aqiMeta(aqi){
+    if(aqi<=50) return { label:"Good", color:"#22c55e", bg:"rgba(34,197,94,0.14)", border:"rgba(34,197,94,0.4)", advice:"Air quality is good — a fine day for outdoor activities, PE, and recess." };
+    if(aqi<=100) return { label:"Moderate", color:"#eab308", bg:"rgba(234,179,8,0.14)", border:"rgba(234,179,8,0.4)", advice:"Acceptable air quality. Unusually sensitive students may want to watch for symptoms; no changes needed for most." };
+    if(aqi<=150) return { label:"Unhealthy for Sensitive Groups", color:"#f97316", bg:"rgba(249,115,22,0.14)", border:"rgba(249,115,22,0.4)", advice:"Students with asthma or respiratory conditions should limit prolonged outdoor exertion — consider shortening outdoor PE/recess for sensitive students." };
+    if(aqi<=200) return { label:"Unhealthy", color:"#ef4444", bg:"rgba(239,68,68,0.16)", border:"rgba(239,68,68,0.5)", advice:"Everyone may begin to notice effects. Limit prolonged outdoor exertion — consider moving PE/recess indoors." };
+    if(aqi<=300) return { label:"Very Unhealthy", color:"#a855f7", bg:"rgba(168,85,247,0.16)", border:"rgba(168,85,247,0.5)", advice:"Health alert: everyone may experience more serious effects. Avoid outdoor activities and keep windows closed." };
+    return { label:"Hazardous", color:"#7f1d1d", bg:"rgba(127,29,29,0.24)", border:"rgba(127,29,29,0.6)", advice:"Health emergency — the entire population is likely affected. Keep everyone indoors and avoid all outdoor exertion." };
+  }
+
   async function fetchPagasaArg(){
     try{
       const res = await fetch(PAGASA_ARG_URL, { cache: "no-store" });
@@ -2119,6 +2195,7 @@
       fetchPagasaNcrForecast().then(() => renderState());
       fetchPagasaArg().then(() => renderState());
       fetchTideForecast(lat, lon).then(() => renderState());
+      fetchAirQuality(lat, lon).then(() => renderState());
     }catch(err){
       console.error(err);
       // Resilient fallback: a safety dashboard should stay usable (and the
@@ -2702,15 +2779,66 @@
       <div class="daily-grid">${dailyItems}</div>
     </section>`;
 
-    html += `<section class="glass daily-card">
-      <div class="card-title">${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Air Quality — Balanga City (IQAir)</div>
-      <div class="alerts-source-hint" style="margin-bottom:0">Real-time AQI, PM2.5, and an hourly/daily air-quality forecast for Balanga City from IQAir's monitoring network. This is a live external page, not something we can pull numbers from directly here (IQAir's embeddable widget requires a signed-in account), so it opens in a new tab.</div>
-      <a href="${IQAIR_BALANGA_URL}" target="_blank" rel="noopener" class="msn-link-btn" style="margin-top:0.85rem">
-        ${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
-        Open Balanga Air Quality on IQAir
-        ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
-      </a>
-    </section>`;
+    {
+      const aq = state.airQuality;
+      const aqOk = aq && aq.ok && Number.isFinite(aq.usAqi);
+      const am = aqOk ? aqiMeta(aq.usAqi) : null;
+      const aqFetchedLabel = (aq && aq.fetchedAt) ? formatTime(Math.floor(aq.fetchedAt/1000)) : "";
+
+      let pollutantTiles = "";
+      if(aqOk){
+        const tiles = [
+          { label:"PM2.5", val: Number.isFinite(aq.pm25) ? aq.pm25.toFixed(1) + " µg/m³" : "—", icon: SM.droplets, color:"#93c5fd" },
+          { label:"PM10", val: Number.isFinite(aq.pm10) ? aq.pm10.toFixed(1) + " µg/m³" : "—", icon: SM.wind, color:"#67e8f9" },
+          { label:"Ozone (O₃)", val: Number.isFinite(aq.o3) ? Math.round(aq.o3) + " µg/m³" : "—", icon: SM.sunrise, color:"#fcd34d" },
+          { label:"NO₂", val: Number.isFinite(aq.no2) ? Math.round(aq.no2) + " µg/m³" : "—", icon: SM.cloudRain, color:"#fda4af" },
+        ];
+        pollutantTiles = `<div class="quick-metrics" style="max-width:none">${tiles.map(t => `
+          <div class="qm glass-light">
+            <div class="qm-icon" style="background:${t.color}33">${t.icon.replace('stroke="currentColor"','stroke="'+t.color+'"').replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:18px;height:18px"')}</div>
+            <div><div class="qm-label">${t.label}</div><div class="qm-val">${t.val}</div></div>
+          </div>`).join("")}</div>`;
+      }
+
+      let hourlyRow = "";
+      if(aqOk && Array.isArray(aq.hourly) && aq.hourly.length){
+        hourlyRow = `<div class="aqi-hourly-row" style="margin-top:1.1rem">${aq.hourly.map((h,i) => {
+          const hAqi = Number.isFinite(h.aqi) ? Math.round(h.aqi) : null;
+          const hMeta = hAqi !== null ? aqiMeta(hAqi) : null;
+          const ts = Math.floor(h.timeMs/1000);
+          return `<div class="aqi-hour-chip">
+            <div class="aqi-hour-time">${i===0 ? "Now" : shortTime(ts)}</div>
+            <div class="aqi-hour-val" style="color:${hMeta ? hMeta.color : '#fff'}">${hAqi !== null ? hAqi : "—"}</div>
+            <div class="aqi-hour-pm">${Number.isFinite(h.pm25) ? h.pm25.toFixed(0)+"µg" : ""}</div>
+          </div>`;
+        }).join("")}</div>`;
+      }
+
+      html += `<section class="glass daily-card">
+        <div class="card-title">${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:19px;height:19px"')} Air Quality — Balanga City</div>
+        ${aqOk ? `
+          <div class="aqi-hero">
+            <div class="aqi-number-wrap">
+              <div class="aqi-number" style="color:${am.color}">${Math.round(aq.usAqi)}</div>
+              <div class="aqi-scale-label">US&nbsp;AQI${aqFetchedLabel ? ` &nbsp;•&nbsp; as of ${aqFetchedLabel}` : ""}</div>
+            </div>
+            <div class="aqi-badge" style="background:${am.bg};border:1px solid ${am.border};color:${am.color}">${am.label}</div>
+          </div>
+          <div class="aqi-bar-track"><div class="aqi-bar-fill" style="width:${Math.max(2,Math.min(100, aq.usAqi/3))}%;background:${am.color}"></div></div>
+          <div class="aqi-advice">${am.advice}</div>
+          ${pollutantTiles}
+          ${hourlyRow}
+          <p class="pagasa-live-hint" style="margin-top:1rem">Modeled estimate for this location (CAMS atmospheric composition data via Open-Meteo), refreshed with the rest of this dashboard — not a ground-station reading. For an actual monitoring-station reading nearby, or a longer forecast, check <a href="${IQAIR_BALANGA_URL}" target="_blank" rel="noopener">IQAir's Balanga page →</a></p>
+        ` : `
+          <div class="alerts-source-hint" style="margin-bottom:0.85rem">Live air-quality data couldn't be loaded for this location right now (temporary network issue). You can still check current conditions directly on IQAir below.</div>
+          <a href="${IQAIR_BALANGA_URL}" target="_blank" rel="noopener" class="msn-link-btn">
+            ${SM.info.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
+            Open Balanga Air Quality on IQAir
+            ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
+          </a>
+        `}
+      </section>`;
+    }
 
     // Alerts
     let alertsHtml = "";
