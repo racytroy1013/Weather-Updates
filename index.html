@@ -1537,7 +1537,15 @@
       if(!byDay[key]) byDay[key] = [];
       byDay[key].push(entry);
     });
-    const days = Object.keys(byDay).sort().slice(0,5);
+    // The forecast "list" this is built from includes the past 24 hours
+    // (needed elsewhere for the rain-continuity check), so a slice of
+    // *yesterday* can land in byDay too. Without filtering it out, that
+    // stray earlier day sorts first and gets mislabeled "Today" below,
+    // pushing the real today into the next card (shown with its actual
+    // weekday name) — i.e. today's weekday appears to show up twice.
+    const now = new Date();
+    const todayKey = now.getFullYear()+"-"+pad(now.getMonth()+1)+"-"+pad(now.getDate());
+    const days = Object.keys(byDay).filter(k => k >= todayKey).sort().slice(0,5);
     return days.map(key => {
       const entries = byDay[key];
       const dayEntries = entries.filter(e => {
