@@ -1397,6 +1397,16 @@
   // Advisory PDF and MSN Severe Weather links above — this links out to
   // the live page rather than trying to embed or scrape it.
   const IQAIR_BALANGA_URL = "https://www.iqair.com/air-quality/philippines/central-luzon/balanga";
+  // PAGASA's own hazard map blocks being framed (X-Frame-Options — confirmed
+  // by testing), so for an actual embedded live map we use Windy.com's
+  // official embed widget instead. It's a different (non-PAGASA) live
+  // radar/satellite source, centered on Balanga's default coordinates —
+  // not PAGASA's own "Active Warnings" overlay, which is why the PAGASA
+  // link-out card above still points people to PAGASA's page for that.
+  const WINDY_EMBED_URL = "https://embed.windy.com/embed2.html?lat=" + DEFAULT_LAT + "&lon=" + DEFAULT_LON +
+    "&detailLat=" + DEFAULT_LAT + "&detailLon=" + DEFAULT_LON +
+    "&zoom=9&level=surface&overlay=radar&product=radar&menu=&message=&marker=true" +
+    "&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1";
 
   // Coarse signature: only changes on a real escalation/de-escalation (not
   // on tiny mm/km-h fluctuations between polls), so the popup doesn't nag
@@ -2947,20 +2957,22 @@
           <span class="live-dot" style="background:#facc15"></span>
           <span>PAGASA Active Warnings — General Flood Advisory & Tropical Cyclone Alert (PANaHON)</span>
         </div>
-        <div class="map-embed-wrap">
-          <iframe src="${PAGASA_NCR_URL}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"
-            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-            title="PAGASA PANaHON hazard map — Active Warnings for NCR/Bataan"></iframe>
-        </div>
-        <p class="pagasa-live-hint" style="margin-bottom:0.7rem">
-          This is PAGASA's own regional hazard map (PANaHON), embedded live — the "Active Warnings" legend on it (General Flood Advisory, Tropical Cyclone Alert) plus satellite/radar layers are PAGASA's, not something this dashboard can read or copy automatically. If the map above shows blank instead of loading (some browsers/networks block embedding PAGASA's page), use the link below instead.
+        <p class="pagasa-live-hint" style="margin-top:0;margin-bottom:0.7rem">
+          PAGASA's regional hazard map (PANaHON) shows an "Active Warnings" legend — General Flood Advisory and Tropical Cyclone Alert — plus live satellite and radar layers for this region, the same NCR/Bataan page the Heavy Rainfall Warning bulletin above is read from. PAGASA's site blocks embedding (confirmed — it refuses the connection when framed), so this opens the live map directly on their site instead.
         </p>
         <a href="${PAGASA_NCR_URL}"
            target="_blank" rel="noopener" class="msn-link-btn">
           ${SM.alertTri.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:16px;height:16px"')}
-          Open Full PAGASA Hazard Map (PANaHON)
+          Open PAGASA Hazard Map (PANaHON)
           ${SM.trend.replace('viewBox="0 0 24 24"','viewBox="0 0 24 24" style="width:14px;height:14px;transform:rotate(-45deg)"')}
         </a>
+        <div class="map-embed-wrap" style="margin-top:0.9rem">
+          <iframe src="${WINDY_EMBED_URL}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"
+            title="Live radar map centered on Balanga City (Windy.com)"></iframe>
+        </div>
+        <p class="pagasa-live-hint" style="margin-bottom:0">
+          Live radar map centered on Balanga, embedded from <a href="https://www.windy.com" target="_blank" rel="noopener">Windy.com</a> — a different provider from PAGASA (whose own map is the link above), shown here because it's actually embeddable. Use the play button on the map for the rain-radar loop, or the layers icon for satellite/wind/temperature.
+        </p>
       </div>
 
       <div class="pagasa-live-block">
